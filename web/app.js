@@ -81,7 +81,7 @@ function loginView() {
     '<div class="hero-brand">' + brandText() + '</div>' +
     '<div class="hero-content"><p class="hero-kicker">SELEKSI INTERNAL</p>' +
     '<h1 id="hero-title">Reorganisasi<br><em>MPK.</em></h1>' +
-    '<p class="hero-intro">Ujian seleksi calon pengurus Majelis Perwakilan Kelas.</p>' +
+    '<p class="hero-intro">Kerjakan ujian seleksi calon pengurus MPK secara online melalui portal ini.</p>' +
     '<div class="hero-bottom">' + icon('people', 18) + '<span>Kelas X dan XI</span></div></div></section>' +
     '<section class="login-panel" aria-labelledby="login-title"><div class="login-content"><div class="login-symbol">' + icon('lock', 23) + '</div>' +
     '<h2 id="login-title">Masuk ke portal</h2><p class="muted">Gunakan ID dan kata sandi dari panitia MPK.</p>' +
