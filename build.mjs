@@ -9,8 +9,9 @@ for (const [path, file, type] of [
   ['/app.js', 'app.js', 'text/javascript'],
   ['/mark.svg', 'mark.svg', 'image/svg+xml'],
   ['/logo-mpk.png', 'logo-mpk.png', 'image/png'],
+  ['/exam-atmosphere.jpg', 'exam-atmosphere.jpg', 'image/jpeg'],
 ]) {
-  const encoding = type === 'image/png' ? 'base64' : 'utf8';
+  const encoding = type === 'image/png' || type === 'image/jpeg' ? 'base64' : 'utf8';
   assets[path] = [type, await readFile(new URL('./web/' + file, import.meta.url), encoding), encoding === 'base64'];
 }
 const worker = await readFile(new URL('./worker.mjs', import.meta.url), 'utf8');

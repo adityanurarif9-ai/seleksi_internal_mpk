@@ -53,8 +53,10 @@ export function createLocalEnvironment(filename = ':memory:', password) {
     ['/style.css', 'style.css', 'text/css'],
     ['/mark.svg', 'mark.svg', 'image/svg+xml'],
     ['/logo-mpk.png', 'logo-mpk.png', 'image/png'],
+    ['/exam-atmosphere.jpg', 'exam-atmosphere.jpg', 'image/jpeg'],
   ]) {
-    assets[url] = [type, readFileSync(new URL('./web/' + file, import.meta.url), type === 'image/png' ? undefined : 'utf8')];
+    const encoding = type === 'image/png' || type === 'image/jpeg' ? undefined : 'utf8';
+    assets[url] = [type, readFileSync(new URL('./web/' + file, import.meta.url), encoding)];
   }
   return { DB: db, ASSETS: assets, ADMIN_PASSWORD: password, close: () => sqlite.close(), hasAdmin: () => !!sqlite.prepare("SELECT 1 FROM users WHERE role='admin'").get() };
 }

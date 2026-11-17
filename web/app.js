@@ -76,17 +76,15 @@ function loginView() {
   clearInterval(clockTimer);
   document.body.className = 'login-body';
   const admin = state.role === 'admin';
-  app.innerHTML = '<header class="site-header"><div class="frame header-inner">' + brand() +
-    '<div class="header-tag"><i></i> Seleksi Internal MPK</div></div></header>' +
-    '<main class="frame login-main"><section class="hero" aria-labelledby="hero-title">' +
+  app.innerHTML = '<main class="login-main"><section class="hero" aria-labelledby="hero-title">' +
     '<div class="hero-art" aria-hidden="true"></div>' +
-    '<div class="hero-content"><p class="hero-kicker"><i></i> SMK TELKOM PURWOKERTO</p>' +
-    '<h1 id="hero-title">Reorganisasi<br><em>MPK</em></h1>' +
-    '<p class="hero-intro">Ujian seleksi calon pengurus Majelis Perwakilan Kelas.</p></div>' +
-    '<div class="hero-emblem">' + crest('hero-crest', 'Lambang MPK Telkom Schools') + '</div>' +
-    '<div class="hero-bottom">' + icon('people', 18) + '<span>Seleksi kelas <strong>X &amp; XI</strong></span></div></section>' +
+    '<div class="hero-brand">' + brandText() + '</div>' +
+    '<div class="hero-content"><p class="hero-kicker">SELEKSI INTERNAL</p>' +
+    '<h1 id="hero-title">Reorganisasi<br><em>MPK.</em></h1>' +
+    '<p class="hero-intro">Ujian seleksi calon pengurus Majelis Perwakilan Kelas.</p>' +
+    '<div class="hero-bottom">' + icon('people', 18) + '<span>Kelas X dan XI</span></div></div></section>' +
     '<section class="login-panel" aria-labelledby="login-title"><div class="login-content"><div class="login-symbol">' + icon('lock', 23) + '</div>' +
-    '<h2 id="login-title">Masuk ke Portal</h2><p class="muted">Masuk dengan akun yang diberikan panitia.</p>' +
+    '<h2 id="login-title">Masuk ke portal</h2><p class="muted">Gunakan ID dan kata sandi dari panitia MPK.</p>' +
     '<div class="role-switch" role="group" aria-label="Jenis akses"><button type="button" data-role="participant" aria-pressed="' + !admin + '">' + icon('user', 17) + ' Peserta</button><button type="button" data-role="admin" aria-pressed="' + admin + '">' + icon('shield', 17) + ' Admin</button></div>' +
     '<form id="login-form"><label for="username">' + (admin ? 'ID Admin' : 'NIS / ID Peserta') + '</label><div class="input-icon">' + icon('user', 18) +
     '<input id="username" name="username" placeholder="' + (admin ? 'Masukkan ID admin' : 'Masukkan NIS atau ID peserta') + '" autocomplete="username" required maxlength="60"></div>' +
@@ -94,7 +92,8 @@ function loginView() {
     '<input id="password" name="password" type="password" placeholder="Masukkan kata sandi" autocomplete="current-password" required maxlength="150">' +
     '<button class="show-password" type="button" aria-label="Tampilkan kata sandi" aria-pressed="false">' + icon('eye', 18) + '</button></div>' +
     '<div class="form-error" role="alert"></div><button class="primary login-button" type="submit">Masuk ' + icon('arrow', 19) + '</button></form>' +
-    '<p class="login-help">' + icon('info', 16) + '<span>Kesulitan masuk? <strong>Hubungi panitia MPK.</strong></span></p></div></section></main>' + footer();
+    '<p class="login-help">' + icon('info', 16) + '<span>Kesulitan masuk? <strong>Hubungi panitia MPK.</strong></span></p></div>' +
+    '<footer class="login-footer">© ' + new Date().getFullYear() + ' MPK SMK Telkom Purwokerto</footer></section></main>';
   app.querySelectorAll('[data-role]').forEach(button => button.addEventListener('click', () => {
     const next = button.dataset.role;
     if (next === state.role) return;
@@ -122,7 +121,8 @@ function loginView() {
 }
 
 function shell(content, inExam = false, inProfile = false) {
-  document.body.className = inExam ? 'workspace-body in-exam' : 'workspace-body';
+  const adminLayout = state.user.role === 'admin' && !inProfile;
+  document.body.className = 'workspace-body' + (inExam ? ' in-exam' : adminLayout ? ' admin-body' : '');
   const identity = inExam ? '<span class="brand exam-brand">' + brandText() + '</span>' : brand();
   const account = inExam ? '<span class="pill cohort-pill">' + html(cohortLabel(state.user.cohort)) + '</span>' :
     '<div class="account"><button class="profile-trigger" id="open-profile" type="button" aria-label="Profil"' + (inProfile ? ' aria-current="page" disabled' : '') + '>' +
@@ -161,7 +161,7 @@ function profileView() {
   const detail = (label, value) => '<div><dt>' + label + '</dt><dd>' + html(value) + '</dd></div>';
   shell('<div class="profile-layout"><button class="secondary profile-back" id="back-profile">' + icon('back', 17) + ' ' + (isParticipant ? 'Kembali ke ujian' : 'Kembali ke dashboard') + '</button>' +
     '<section class="surface profile-card" aria-labelledby="profile-title"><header class="profile-cover"><h1 id="profile-title" tabindex="-1">Profil Saya</h1></header><div class="profile-card-body">' +
-    avatar(user, 'avatar-large') + '<span class="pill cohort-pill">' + role + '</span><h2>' + html(user.name) + '</h2>' +
+    '<div class="profile-identity">' + avatar(user, 'avatar-large') + '<div><span class="pill cohort-pill">' + role + '</span><h2>' + html(user.name) + '</h2></div></div>' +
     '<dl class="profile-info">' + detail(isParticipant ? 'NIS / ID peserta' : 'ID admin', user.username) +
     (isParticipant ? detail('Tingkat', cohortLabel(user.cohort)) + detail('Rombel', user.class) : '') + '</dl></div></section></div>', false, true);
   const back = app.querySelector('#back-profile');
@@ -288,7 +288,8 @@ function participantView() {
   const completed = !!a?.submitted;
   const open = !!(state.config.is_open && state.config.total);
   const detail = completed
-    ? '<section class="surface status-card"><div class="login-symbol">' + icon('check', 25) + '</div><h2>Jawaban sudah dikumpulkan</h2><p>Pengumpulan tercatat pada ' + date(a.submitted) + '. Panitia akan memeriksa jawaban dan menyampaikan hasil seleksi.</p></section>'
+    ? '<section class="surface status-card"><div class="receipt-mark">' + icon('check', 34) + '</div><div><span class="pill good">Ujian selesai</span><h2>Jawaban sudah dikumpulkan</h2><p>Panitia akan memeriksa jawaban dan menyampaikan hasil seleksi.</p></div>' +
+      '<div class="receipt-time">' + icon('clock', 19) + '<span><small>Waktu pengumpulan</small><strong>' + date(a.submitted) + '</strong></span></div></section>'
     : '<div class="participant-grid"><section class="surface exam-overview"><div class="exam-overview-top"><span class="login-symbol">' + icon('book', 22) +
     '</span><span class="pill ' + (open ? 'good' : '') + '">' + (open ? 'Ujian dibuka' : 'Ujian belum dibuka') + '</span></div><h2>Ujian Seleksi MPK</h2><p>Kerjakan soal reorganisasi dalam waktu yang disediakan.</p>' +
     '<div class="exam-meta"><div>' + icon('file') + ' <span><strong>' + state.config.total + '</strong><small>Jumlah soal</small></span></div><div>' + icon('clock') +
@@ -364,6 +365,7 @@ function examView() {
     '<button class="secondary flag" id="flag" aria-pressed="' + state.flagged.has(item.id) + '">' + icon('flag', 17) + ' Tandai</button>' +
     '<button class="primary" data-jump="' + (state.question + 1) + '"' + (state.question === items.length - 1 ? ' disabled' : '') + '>Selanjutnya ' + icon('arrow', 17) + '</button></div></section>' +
     '<aside class="surface navigator"><div class="navigation-head"><div><h2>Navigasi Soal</h2><p id="answer-count">' + answered + ' dari ' + items.length + ' terjawab</p></div><button class="secondary small" id="toggle-numbers" type="button" aria-expanded="false" aria-controls="number-grid">Lihat daftar</button></div>' +
+    '<progress class="answer-progress" id="answer-progress" aria-label="Progres jawaban" value="' + answered + '" max="' + items.length + '"></progress>' +
     '<div class="number-grid" id="number-grid">' + items.map((q, index) => '<button class="number ' + (isAnswered(q) ? 'answered ' : '') + (state.flagged.has(q.id) ? 'flagged ' : '') + (index === state.question ? 'current' : '') + '" data-jump="' + index + '" aria-label="Soal ' + (index + 1) + (state.flagged.has(q.id) ? ', ditandai' : '') + (isAnswered(q) ? ', terjawab' : '') + '"' + (index === state.question ? ' aria-current="step"' : '') + '>' + (index + 1) + '</button>').join('') + '</div>' +
     '<div class="navigator-actions"><button class="primary" id="finish">Kumpulkan Jawaban</button><p id="save-label" role="status">' + (saved < version ? 'Menunggu penyimpanan…' : 'Jawaban tersimpan') + '</p></div></aside></div>' +
     '<dialog id="confirm-submit" aria-labelledby="submit-title"><h2 id="submit-title">Kumpulkan jawaban?</h2><p id="submit-summary"></p><form method="dialog" class="actions"><button class="secondary" value="cancel" autofocus>Kembali</button><button class="primary" value="submit">Ya, kumpulkan</button></form></dialog>', true);
@@ -390,7 +392,9 @@ function examView() {
   const change = next => {
     answers[item.id] = next;
     version++;
-    app.querySelector('#answer-count').textContent = items.filter(isAnswered).length + ' dari ' + items.length + ' terjawab';
+    const count = items.filter(isAnswered).length;
+    app.querySelector('#answer-count').textContent = count + ' dari ' + items.length + ' terjawab';
+    app.querySelector('#answer-progress').value = count;
     const button = app.querySelector('.number.current');
     button.classList.toggle('answered', isAnswered(item));
     button.setAttribute('aria-label', 'Soal ' + (state.question + 1) + (state.flagged.has(item.id) ? ', ditandai' : '') + (isAnswered(item) ? ', terjawab' : ''));
@@ -574,9 +578,10 @@ function resultsPanel(data) {
 
 function adminView() {
   const panels = { overview, questions: questionsPanel, participants: participantPanel, results: resultsPanel };
-  const nav = '<nav class="admin-nav" aria-label="Menu panitia">' + pages.map(([id, label, glyph]) =>
-    '<button data-page="' + id + '"' + (id === state.page ? ' aria-current="page"' : '') + '>' + icon(glyph, 18) + ' ' + label + '</button>').join('') + '</nav>';
-  shell(heading('PANEL PANITIA', 'Dashboard Admin', 'Kelola ujian reorganisasi MPK SMK Telkom Purwokerto.') + nav + panels[state.page](state.admin));
+  const nav = '<aside class="admin-sidebar"><nav class="admin-nav" aria-label="Menu panitia">' + pages.map(([id, label, glyph]) =>
+    '<button data-page="' + id + '"' + (id === state.page ? ' aria-current="page"' : '') + '>' + icon(glyph, 19) + '<span>' + label + '</span></button>').join('') + '</nav></aside>';
+  shell('<div class="admin-layout">' + nav + '<div class="admin-content">' +
+    heading('PANEL PANITIA', 'Dashboard Admin', 'Kelola akun peserta, bank soal, dan hasil ujian.') + panels[state.page](state.admin) + '</div></div>');
   app.querySelectorAll('[data-page]').forEach(button => button.addEventListener('click', async () => {
     const page = button.dataset.page;
     Object.assign(state, { page, edit: null, review: null, classEdit: null, violationView: null });
