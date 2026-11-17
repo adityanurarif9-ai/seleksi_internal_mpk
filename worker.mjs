@@ -1,0 +1,314 @@
+const HOUR = 3600000;
+const secureHeaders = {
+  'X-Content-Type-Options': 'nosniff',
+  'Referrer-Policy': 'same-origin',
+  'Content-Security-Policy': "default-src 'self'; style-src 'self'; script-src 'self'; img-src 'self'; base-uri 'none'; form-action 'self'; frame-ancestors 'self'",
+};
+
+function json(data, status = 200, extra = {}) {
+  return Response.json(data, { status, headers: { ...secureHeaders, 'Cache-Control': 'no-store', ...extra } });
+}
+
+function fail(message, status = 400) {
+  throw Object.assign(new Error(message), { status });
+}
+
+const encoder = new TextEncoder();
+const hex = bytes => Array.from(new Uint8Array(bytes), byte => byte.toString(16).padStart(2, '0')).join('');
+const token = () => hex(crypto.getRandomValues(new Uint8Array(24)));
+const hash = async value => hex(await crypto.subtle.digest('SHA-256', encoder.encode(value)));
+async function passwordHash(value, salt = token()) {
+  const key = await crypto.subtle.importKey('raw', encoder.encode(value), 'PBKDF2', false, ['deriveBits']);
+  const result = await crypto.subtle.deriveBits({ name: 'PBKDF2', hash: 'SHA-256', salt: encoder.encode(salt), iterations: 100000 }, key, 256);
+  return salt + '.' + hex(result);
+}
+
+function equal(a, b) {
+  if (a.length !== b.length) return false;
+  let difference = 0;
+  for (let i = 0; i < a.length; i++) difference |= a.charCodeAt(i) ^ b.charCodeAt(i);
+  return difference === 0;
+}
+
+const parse = JSON.parse;
+const stringify = JSON.stringify;
+const userFields = 'id, username, name, class, role, cohort';
+
+async function currentUser(db, raw) {
+  if (!/^[0-9a-f]{48}$/.test(raw)) return null;
+  return db.prepare('SELECT u.id, u.username, u.name, u.class, u.role, u.cohort FROM sessions s JOIN users u ON u.id=s.user_id WHERE s.token=? AND s.expires>?')
+    .bind(await hash(raw), Date.now()).first();
+}
+
+async function settings(db) {
+  const row = await db.prepare('SELECT duration, is_open FROM settings WHERE id=1').first();
+  const count = await db.prepare('SELECT count(*) AS total FROM questions').first();
+  return { ...row, total: count.total };
+}
+
+async function questions(db) {
+  const data = await db.prepare('SELECT body FROM questions ORDER BY ' + (db.questionOrder ?? 'rowid')).all();
+  return data.results.map(q => parse(q.body));
+}
+
+async function attempt(db, id) {
+  const now = Date.now();
+  await db.prepare('UPDATE attempts SET submitted=deadline WHERE user_id=? AND submitted IS NULL AND deadline<=?').bind(id, now).run();
+  return db.prepare('SELECT attempts.*, (SELECT count(*) FROM violations WHERE violations.user_id=attempts.user_id) AS violation_count FROM attempts WHERE user_id=?').bind(id).first();
+}
+
+function grade(items, answers, review) {
+  const max = items.reduce((sum, item) => sum + item.points, 0);
+  const score = items.reduce((sum, item) => {
+    if (item.type === 'essay') return sum + (review?.points[item.id] ?? 0);
+    return sum + (answers[item.id] === item.correct ? item.points : 0);
+  }, 0);
+  return { score, max, pending: items.some(item => item.type === 'essay') && !review };
+}
+
+function publicAttempt(row) {
+  if (!row) return null;
+  const items = parse(row.snapshot);
+  const base = { started: row.started, deadline: row.deadline, submitted: row.submitted, count: items.length, violationCount: row.violation_count };
+  if (row.submitted) return base;
+  return { ...base, items: items.map(({ correct, ...item }) => item), answers: parse(row.answers) };
+}
+
+function answersFor(items, input) {
+  const answers = {};
+  for (const item of items) {
+    const value = input?.[item.id];
+    if (item.type === 'essay' && typeof value === 'string') answers[item.id] = value.slice(0, 3000);
+    if (item.type === 'choice' && Number.isInteger(value) && value >= 0 && value < item.options.length) answers[item.id] = value;
+  }
+  return answers;
+}
+
+function field(value, max) {
+  return typeof value === 'string' ? value.trim().slice(0, max) : '';
+}
+
+async function limit(db, key, max) {
+  const window = Math.floor(Date.now() / (10 * 60000));
+  const { hits } = await db.prepare('INSERT INTO login_limits (key, "window", hits) VALUES (?,?,1) ON CONFLICT(key) DO UPDATE SET hits=CASE WHEN login_limits."window"=excluded."window" THEN login_limits.hits+1 ELSE 1 END, "window"=excluded."window" RETURNING hits')
+    .bind(await hash(key), window).first();
+  if (hits > max) fail('Terlalu banyak percobaan. Coba lagi dalam beberapa menit.', 429);
+}
+
+async function api(request, env, path) {
+  const db = env.DB;
+  const url = new URL(request.url);
+  const method = request.method;
+  const raw = request.headers.get('Cookie')?.match(/(?:^|;\s*)mpk_session=([^;]+)/)?.[1] ?? '';
+  const cookie = 'Path=/; HttpOnly; SameSite=Lax' + (url.protocol === 'https:' ? '; Secure' : '');
+  if (method !== 'GET') {
+    const origin = request.headers.get('Origin');
+    if (origin && origin !== url.origin) fail('Asal permintaan tidak valid.', 403);
+    if (!request.headers.get('Content-Type')?.startsWith('application/json')) fail('Format permintaan tidak valid.', 415);
+  }
+  const body = async () => {
+    const content = await request.text();
+    if (content.length > 330000) fail('Data terlalu besar.', 413);
+    try { return parse(content) ?? {}; } catch { fail('Data tidak valid.'); }
+  };
+  if (path === '/api/login' && method === 'POST') {
+    const input = await body();
+    const username = field(input.username, 60).toLowerCase();
+    const password = typeof input.password === 'string' ? input.password : '';
+    if (!username || !password || password.length > 150) fail('Isi ID akun dan kata sandi.');
+    await limit(db, 'ip:' + (env.CLIENT_IP ?? request.headers.get('CF-Connecting-IP') ?? 'local'), 100);
+    await limit(db, 'account:' + username, 12);
+    let row = await db.prepare('SELECT * FROM users WHERE username=?').bind(username).first();
+    if (!row && username === 'admin' && env.ADMIN_PASSWORD && equal(password, env.ADMIN_PASSWORD)) {
+      await db.prepare("INSERT INTO users (id, username, name, class, password, role) VALUES (?,?,?,'',?,'admin') ON CONFLICT (username) DO NOTHING")
+        .bind(crypto.randomUUID(), username, 'Panitia MPK', await passwordHash(password)).run();
+      row = await db.prepare('SELECT * FROM users WHERE username=?').bind(username).first();
+    }
+    const candidate = await passwordHash(password, row?.password.split('.')[0] ?? 'unregistered');
+    if (!row || !equal(candidate, row.password) || row.role !== input.role) fail('ID akun, kata sandi, atau pilihan akses tidak sesuai.', 401);
+    const session = token();
+    await db.batch([
+      db.prepare('DELETE FROM sessions WHERE expires<=?').bind(Date.now()),
+      db.prepare('INSERT INTO sessions VALUES (?,?,?)').bind(await hash(session), row.id, Date.now() + 12 * HOUR),
+      db.prepare('DELETE FROM login_limits WHERE key=?').bind(await hash('account:' + username)),
+    ]);
+    const { password: _password, ...user } = row;
+    return json({ user }, 200, { 'Set-Cookie': 'mpk_session=' + session + '; ' + cookie + '; Max-Age=43200' });
+  }
+  const user = await currentUser(db, raw);
+  if (path === '/api/me') {
+    if (method === 'GET') return json({ user });
+    return json({ error: 'Profil hanya dapat dilihat.' }, 405, { Allow: 'GET' });
+  }
+  if (!user) fail('Sesi berakhir. Silakan masuk kembali.', 401);
+  if (path === '/api/logout' && method === 'POST') {
+    await db.prepare('DELETE FROM sessions WHERE token=?').bind(await hash(raw)).run();
+    return json({}, 200, { 'Set-Cookie': 'mpk_session=; ' + cookie + '; Max-Age=0' });
+  }
+  if (path.startsWith('/api/admin/')) {
+    if (user.role !== 'admin') fail('Akses khusus panitia.', 403);
+    return admin(db, path, method, body);
+  }
+  if (user.role !== 'participant') fail('Akses khusus peserta.', 403);
+  if (path === '/api/exam' && method === 'GET') {
+    return json({ settings: await settings(db), attempt: publicAttempt(await attempt(db, user.id)), now: Date.now() });
+  }
+  if (path === '/api/exam/start' && method === 'POST') {
+    const existing = await attempt(db, user.id);
+    if (existing) return json({ attempt: publicAttempt(existing), now: Date.now() });
+    const config = await settings(db);
+    const items = await questions(db);
+    if (!config.is_open || !items.length) fail('Ujian belum dibuka oleh panitia.', 409);
+    const now = Date.now();
+    await db.prepare('INSERT INTO attempts (user_id,snapshot,started,deadline) SELECT ?,?,?,? WHERE (SELECT is_open FROM settings WHERE id=1)=1 ON CONFLICT (user_id) DO NOTHING')
+      .bind(user.id, stringify(items), now, now + config.duration * 60000).run();
+    const started = await attempt(db, user.id);
+    if (!started) fail('Ujian telah ditutup oleh panitia.', 409);
+    return json({ attempt: publicAttempt(started), now: Date.now() });
+  }
+  if (path === '/api/exam/answers' && method === 'POST') {
+    const input = await body();
+    const row = await attempt(db, user.id);
+    if (!row) fail('Mulai ujian terlebih dahulu.', 409);
+    if (!row.submitted) {
+      const now = Date.now();
+      const answers = stringify(answersFor(parse(row.snapshot), input.answers));
+      await db.prepare('UPDATE attempts SET answers=?, submitted=? WHERE user_id=? AND submitted IS NULL AND deadline>?')
+        .bind(answers, input.submit === true ? now : null, user.id, now).run();
+    }
+    return json({ attempt: publicAttempt(await attempt(db, user.id)), now: Date.now() });
+  }
+  if (path === '/api/exam/violations' && method === 'POST') {
+    const { id, kind, at, started } = await body();
+    if (typeof id !== 'string' || !/^[0-9a-f-]{36}$/.test(id) || !['tab-hidden', 'fullscreen-exit'].includes(kind) ||
+        !Number.isSafeInteger(at) || !Number.isSafeInteger(started)) fail('Catatan pelanggaran tidak valid.');
+    const now = Date.now();
+    const row = await attempt(db, user.id);
+    if (!row || row.started !== started) fail('Percobaan ujian tidak ditemukan.', 409);
+    const end = row.submitted ?? Math.min(now, row.deadline);
+    // The clock offset is estimated from the server response and can differ slightly in transit.
+    if (now <= row.deadline + 24 * HOUR && at >= row.started - 2000 && at <= end + 2000) {
+      await db.prepare('INSERT INTO violations (user_id, event_id, kind, occurred_at) VALUES (?,?,?,?) ON CONFLICT (user_id, event_id) DO NOTHING')
+        .bind(user.id, id, kind, Math.max(row.started, Math.min(end, at))).run();
+    }
+    const { total } = await db.prepare('SELECT count(*) AS total FROM violations WHERE user_id=?').bind(user.id).first();
+    return json({ total });
+  }
+  fail('Halaman tidak ditemukan.', 404);
+}
+
+async function admin(db, path, method, body) {
+  if (path === '/api/admin/dashboard' && method === 'GET') {
+    const now = Date.now();
+    await db.prepare('UPDATE attempts SET submitted=deadline WHERE submitted IS NULL AND deadline<=?').bind(now).run();
+    const users = await db.prepare("SELECT " + userFields + " FROM users WHERE role='participant' ORDER BY name").all();
+    const attempts = await db.prepare('SELECT attempts.*, (SELECT count(*) FROM violations WHERE violations.user_id=attempts.user_id) AS violation_count FROM attempts ORDER BY started DESC').all();
+    const results = attempts.results.map(row => {
+      const items = parse(row.snapshot);
+      const answers = parse(row.answers);
+      const review = row.review ? parse(row.review) : null;
+      return { userId: row.user_id, started: row.started, submitted: row.submitted, violationCount: row.violation_count, ...(row.submitted ? { items, answers, review, ...grade(items, answers, review) } : {}) };
+    });
+    return json({ settings: await settings(db), questions: await questions(db), participants: users.results, results });
+  }
+  if (path === '/api/admin/violations' && method === 'POST') {
+    const { userId } = await body();
+    const result = await db.prepare('SELECT kind, occurred_at AS at FROM violations WHERE user_id=? ORDER BY occurred_at DESC, event_id DESC')
+      .bind(field(userId, 80)).all();
+    return json({ violations: result.results });
+  }
+  if (path === '/api/admin/settings' && method === 'POST') {
+    const input = await body();
+    const duration = Number(input.duration);
+    if (!Number.isInteger(duration) || duration < 1 || duration > 240) fail('Durasi harus antara 1 dan 240 menit.');
+    if (input.open && !(await settings(db)).total) fail('Tambahkan setidaknya satu soal untuk membuka ujian.');
+    await db.prepare('UPDATE settings SET duration=?, is_open=? WHERE id=1').bind(duration, input.open === true ? 1 : 0).run();
+    return json({});
+  }
+  if (path === '/api/admin/participants' && method === 'POST') {
+    const input = await body();
+    const username = field(input.username, 60).toLowerCase();
+    const name = field(input.name, 100);
+    const className = field(input.class, 40);
+    const password = typeof input.password === 'string' ? input.password : '';
+    if (!/^[a-z0-9._-]{3,60}$/.test(username) || username === 'admin') fail('ID peserta harus 3–60 karakter, berupa huruf, angka, titik, strip, atau garis bawah.');
+    if (!name || !className || password.length < 8 || password.length > 150) fail('Isi nama dan rombel, lalu gunakan kata sandi 8–150 karakter.');
+    if (!['X', 'XI'].includes(input.cohort)) fail('Pilih tingkat kelas X atau XI.');
+    const result = await db.prepare("INSERT INTO users (id, username, name, class, password, role, cohort) VALUES (?,?,?,?,?,'participant',?) ON CONFLICT (username) DO NOTHING")
+      .bind(crypto.randomUUID(), username, name, className, await passwordHash(password), input.cohort).run();
+    if (!result.meta.changes) fail('ID peserta sudah digunakan.', 409);
+    return json({}, 201);
+  }
+  if (path === '/api/admin/participants/class' && method === 'POST') {
+    const input = await body();
+    const className = field(input.class, 40);
+    if (!className || !['X', 'XI'].includes(input.cohort)) fail('Isi rombel dan pilih tingkat kelas X atau XI.');
+    const result = await db.prepare("UPDATE users SET class=?, cohort=? WHERE id=? AND role='participant'")
+      .bind(className, input.cohort, field(input.id, 80)).run();
+    if (!result.meta.changes) fail('Peserta tidak ditemukan.', 404);
+    return json({});
+  }
+  if (path === '/api/admin/questions' && method === 'POST') {
+    const input = await body();
+    const existing = typeof input.id === 'string' && input.id;
+    const id = existing || crypto.randomUUID();
+    const type = input.type;
+    const prompt = field(input.prompt, 1500);
+    const points = Number(input.points);
+    if (!['choice', 'essay'].includes(type) || !prompt || !Number.isInteger(points) || points < 1 || points > 100) fail('Isi pertanyaan dan bobot 1–100.');
+    const item = { id, type, prompt, points };
+    if (type === 'choice') {
+      const options = Array.isArray(input.options) ? input.options.map(value => field(value, 500)) : [];
+      const correct = Number(input.correct);
+      if (options.length !== 4 || options.some(value => !value) || ![0, 1, 2, 3].includes(correct)) fail('Isi empat pilihan dan tentukan kunci jawaban.');
+      Object.assign(item, { options, correct });
+    }
+    if (existing) {
+      const result = await db.prepare('UPDATE questions SET body=? WHERE id=?').bind(stringify(item), id).run();
+      if (!result.meta.changes) fail('Soal sudah dihapus.', 404);
+    } else {
+      const result = await db.prepare('INSERT INTO questions (id, body) SELECT ?,? WHERE (SELECT count(*) FROM questions)<100').bind(id, stringify(item)).run();
+      if (!result.meta.changes) fail('Bank soal sudah mencapai 100 soal.', 409);
+    }
+    return json({});
+  }
+  if (path === '/api/admin/questions/delete' && method === 'POST') {
+    const { id } = await body();
+    await db.batch([
+      db.prepare('DELETE FROM questions WHERE id=?').bind(field(id, 80)),
+      db.prepare('UPDATE settings SET is_open=0 WHERE NOT EXISTS (SELECT 1 FROM questions)'),
+    ]);
+    return json({});
+  }
+  if (path === '/api/admin/review' && method === 'POST') {
+    const input = await body();
+    const row = await attempt(db, field(input.userId, 80));
+    if (!row?.submitted) fail('Peserta belum mengumpulkan jawaban.', 409);
+    const points = {};
+    for (const item of parse(row.snapshot).filter(item => item.type === 'essay')) {
+      const value = input.points?.[item.id];
+      if (!Number.isInteger(value) || value < 0 || value > item.points) fail('Nilai esai harus berada dalam rentang bobot soal.');
+      points[item.id] = value;
+    }
+    await db.prepare('UPDATE attempts SET review=? WHERE user_id=?').bind(stringify({ points }), row.user_id).run();
+    return json({});
+  }
+  fail('Halaman admin tidak ditemukan.', 404);
+}
+
+export default {
+  async fetch(request, env) {
+    const path = new URL(request.url).pathname;
+    try {
+      if (path.startsWith('/api/')) return await api(request, env, path);
+      const asset = (typeof assets !== 'undefined' ? assets : env.ASSETS)[path === '/admin' ? '/' : path];
+      if (!asset) return new Response('Halaman tidak ditemukan.', { status: 404, headers: secureHeaders });
+      const [type, content, encoded] = asset;
+      const body = encoded ? Uint8Array.from(atob(content), byte => byte.charCodeAt(0)) : content;
+      return new Response(body, { headers: { ...secureHeaders, 'Content-Type': type, 'Cache-Control': 'no-cache' } });
+    } catch (error) {
+      if (!error.status) console.error(error.message);
+      return json({ error: error.status ? error.message : 'Terjadi gangguan. Coba lagi sebentar.' }, error.status || 500);
+    }
+  },
+};

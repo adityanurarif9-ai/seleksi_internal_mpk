@@ -1,0 +1,22 @@
+{
+  "$schema": "https://openapi.vercel.sh/vercel.json",
+  "framework": null,
+  "outputDirectory": "web",
+  "rewrites": [
+    { "source": "/admin", "destination": "/index.html" },
+    { "source": "/api/:action(login|logout|me)", "destination": "/api/portal?mpk_path=:action" },
+    { "source": "/api/exam", "destination": "/api/portal?mpk_path=exam" },
+    { "source": "/api/exam/:action", "destination": "/api/portal?mpk_path=exam/:action" },
+    { "source": "/api/admin/:action*", "destination": "/api/portal?mpk_path=admin/:action*" }
+  ],
+  "headers": [
+    {
+      "source": "/(.*)",
+      "headers": [
+        { "key": "X-Content-Type-Options", "value": "nosniff" },
+        { "key": "Referrer-Policy", "value": "same-origin" },
+        { "key": "Content-Security-Policy", "value": "default-src 'self'; style-src 'self'; script-src 'self'; img-src 'self'; base-uri 'none'; form-action 'self'; frame-ancestors 'self'" }
+      ]
+    }
+  ]
+}

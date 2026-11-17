@@ -1,0 +1,8 @@
+CREATE TABLE users (id TEXT PRIMARY KEY, username TEXT UNIQUE NOT NULL, name TEXT NOT NULL, class TEXT NOT NULL, password TEXT NOT NULL, role TEXT NOT NULL);
+CREATE TABLE sessions (token TEXT PRIMARY KEY, user_id TEXT NOT NULL REFERENCES users(id) ON DELETE CASCADE, expires INTEGER NOT NULL);
+CREATE INDEX sessions_expiry ON sessions(expires);
+CREATE TABLE login_limits (key TEXT PRIMARY KEY, window INTEGER NOT NULL, hits INTEGER NOT NULL);
+CREATE TABLE questions (id TEXT PRIMARY KEY, body TEXT NOT NULL);
+CREATE TABLE settings (id INTEGER PRIMARY KEY CHECK (id = 1), duration INTEGER NOT NULL, is_open INTEGER NOT NULL);
+INSERT INTO settings VALUES (1, 45, 0);
+CREATE TABLE attempts (user_id TEXT PRIMARY KEY REFERENCES users(id), snapshot TEXT NOT NULL, answers TEXT NOT NULL DEFAULT '{}', started INTEGER NOT NULL, deadline INTEGER NOT NULL, submitted INTEGER, review TEXT);
