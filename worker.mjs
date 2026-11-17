@@ -54,7 +54,8 @@ async function questions(db) {
 async function attempt(db, id) {
   const now = Date.now();
   await db.prepare('UPDATE attempts SET submitted=deadline WHERE user_id=? AND submitted IS NULL AND deadline<=?').bind(id, now).run();
-  return db.prepare('SELECT attempts.*, (SELECT count(*) FROM violations WHERE violations.user_id=attempts.user_id) AS violation_count FROM attempts WHERE user_id=?').bind(id).first();
+  return db.prepare("SELECT attempts.*, (SELECT count(*) FROM violations WHERE violations.user_id=attempts.user_id) AS violation_count, (SELECT count(*) FROM violations WHERE violations.user_id=attempts.user_id AND kind='tab-hidden') AS tab_exit_count FROM attempts WHERE user_id=?")
+    .bind(id).first();
 }
 
 function grade(items, answers, review) {
@@ -69,7 +70,7 @@ function grade(items, answers, review) {
 function publicAttempt(row) {
   if (!row) return null;
   const items = parse(row.snapshot);
-  const base = { started: row.started, deadline: row.deadline, submitted: row.submitted, count: items.length, violationCount: row.violation_count };
+  const base = { started: row.started, deadline: row.deadline, submitted: row.submitted, count: items.length, violationCount: row.violation_count, tabExitCount: row.tab_exit_count };
   if (row.submitted) return base;
   return { ...base, items: items.map(({ correct, ...item }) => item), answers: parse(row.answers) };
 }
@@ -188,11 +189,12 @@ async function api(request, env, path) {
     const end = row.submitted ?? Math.min(now, row.deadline);
     // The clock offset is estimated from the server response and can differ slightly in transit.
     if (now <= row.deadline + 24 * HOUR && at >= row.started - 2000 && at <= end + 2000) {
-      await db.prepare('INSERT INTO violations (user_id, event_id, kind, occurred_at) VALUES (?,?,?,?) ON CONFLICT (user_id, event_id) DO NOTHING')
+      await db.prepare("INSERT INTO violations (user_id, event_id, kind, occurred_at) VALUES (?,?,?,?) ON CONFLICT (user_id, event_id) DO UPDATE SET kind=excluded.kind WHERE violations.kind='fullscreen-exit' AND excluded.kind='tab-hidden'")
         .bind(user.id, id, kind, Math.max(row.started, Math.min(end, at))).run();
     }
-    const { total } = await db.prepare('SELECT count(*) AS total FROM violations WHERE user_id=?').bind(user.id).first();
-    return json({ total });
+    const counts = await db.prepare("SELECT count(*) AS total, count(*) FILTER (WHERE kind='tab-hidden') AS tab_exits FROM violations WHERE user_id=?")
+      .bind(user.id).first();
+    return json({ total: counts.total, tabExitCount: counts.tab_exits });
   }
   fail('Halaman tidak ditemukan.', 404);
 }

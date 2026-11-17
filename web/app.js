@@ -9,6 +9,8 @@ let version = 0;
 let saved = 0;
 let submitting = false;
 let guardReason = '';
+let guardIncident = null;
+let hiddenDeparture = false;
 let fullscreenFallback = false;
 let fullscreenTransition = false;
 let violationKey = '';
@@ -142,6 +144,8 @@ function shell(content, inExam = false, inProfile = false) {
       clearTimeout(saveTimer);
       Object.assign(state, { user: null, page: 'overview', attempt: null, question: 0, flagged: new Set(), edit: null, review: null, cohort: '', classEdit: null, violationView: null });
       guardReason = '';
+      guardIncident = null;
+      hiddenDeparture = false;
       fullscreenFallback = false;
       violationKey = '';
       pendingViolations = [];
@@ -183,9 +187,14 @@ async function route() {
 }
 
 function updateAttempt(data) {
+  const previous = state.attempt;
   state.attempt = data.attempt;
   state.offset = data.now - Date.now();
   if (!state.attempt) return;
+  if (previous?.started === state.attempt.started) {
+    state.attempt.violationCount = Math.max(previous.violationCount, state.attempt.violationCount);
+    state.attempt.tabExitCount = Math.max(previous.tabExitCount ?? 0, state.attempt.tabExitCount ?? 0);
+  }
   const key = 'mpk-violations:' + state.user.id + ':' + state.attempt.started;
   if (violationKey === key) return;
   violationKey = key;
@@ -210,26 +219,40 @@ function flushViolations() {
   for (const event of pendingViolations) {
     if (postingViolations.has(event.id)) continue;
     postingViolations.add(event.id);
-    api('exam/violations', event, true).then(({ total }) => {
+    api('exam/violations', event, true).then(({ total, tabExitCount }) => {
       if (key !== violationKey) return;
-      pendingViolations = pendingViolations.filter(entry => entry.id !== event.id);
+      pendingViolations = pendingViolations.filter(entry => entry.id !== event.id || entry.kind !== event.kind);
       cacheViolations();
       state.attempt.violationCount = Math.max(state.attempt.violationCount, total);
+      state.attempt.tabExitCount = Math.max(state.attempt.tabExitCount ?? 0, tabExitCount ?? 0);
       renderGuard();
+      renderTabReceipt();
     }).catch(() => {
       if (key === violationKey) violationRetry = setTimeout(flushViolations, 3000);
-    }).finally(() => postingViolations.delete(event.id));
+    }).finally(() => {
+      postingViolations.delete(event.id);
+      if (key === violationKey && pendingViolations.some(entry => entry.id === event.id && entry.kind !== event.kind)) flushViolations();
+    });
   }
 }
 
 function recordViolation(kind) {
   const attempt = state.attempt;
   const at = Date.now() + state.offset;
-  if (!attempt?.items || at >= attempt.deadline || violationLabels[guardReason]) return;
+  if (!attempt?.items || at >= attempt.deadline) return;
+  if (kind === 'tab-hidden') {
+    if (hiddenDeparture) return;
+    hiddenDeparture = true;
+  } else if (guardIncident || document.hidden) return;
+  // Switching tabs can also exit fullscreen. Keep one record for the same departure.
+  const sameDeparture = kind === 'tab-hidden' && guardIncident?.kind === 'fullscreen-exit' && at - guardIncident.at < 1800;
+  const incident = sameDeparture ? { ...guardIncident, kind } : { id: crypto.randomUUID(), kind, at, started: attempt.started };
   const confirmation = app.querySelector('#confirm-submit');
   if (confirmation?.open) confirmation.close('cancel');
   guardReason = kind;
-  pendingViolations.push({ id: crypto.randomUUID(), kind, at, started: attempt.started });
+  guardIncident = incident;
+  pendingViolations = pendingViolations.filter(entry => entry.id !== incident.id);
+  pendingViolations.push(incident);
   cacheViolations();
   flushViolations();
   renderGuard(!document.hidden);
@@ -271,25 +294,42 @@ document.addEventListener('fullscreenchange', () => {
 });
 document.addEventListener('visibilitychange', () => {
   if (document.hidden) recordViolation('tab-hidden');
-  else if (state.attempt?.items) {
-    flushViolations();
-    renderGuard(true);
+  else {
+    hiddenDeparture = false;
+    if (state.attempt?.items) {
+      flushViolations();
+      renderGuard(true);
+    }
   }
 });
 window.addEventListener('pagehide', () => recordViolation('tab-hidden'));
 window.addEventListener('online', flushViolations);
+
+function renderTabReceipt() {
+  const receipt = app.querySelector('#tab-receipt');
+  if (!receipt) return;
+  const pending = pendingViolations.some(event => event.kind === 'tab-hidden');
+  const count = state.attempt.tabExitCount ?? 0;
+  receipt.querySelector('strong').textContent = pending ? 'Catatan sedang disinkronkan…' :
+    count ? 'Kamu keluar dari tab ujian ' + count + ' kali.' : 'Tidak ada catatan keluar tab.';
+  receipt.classList.toggle('has-exits', count > 0);
+}
 
 function participantView() {
   clearInterval(clockTimer);
   const a = state.attempt;
   if (a?.items) return examView();
   guardReason = '';
+  guardIncident = null;
+  hiddenDeparture = false;
   if (document.fullscreenElement) document.exitFullscreen().catch(() => {});
   const completed = !!a?.submitted;
   const open = !!(state.config.is_open && state.config.total);
   const detail = completed
-    ? '<section class="surface status-card"><div class="receipt-mark">' + icon('check', 34) + '</div><div><span class="pill good">Ujian selesai</span><h2>Jawaban sudah dikumpulkan</h2><p>Panitia akan memeriksa jawaban dan menyampaikan hasil seleksi.</p></div>' +
-      '<div class="receipt-time">' + icon('clock', 19) + '<span><small>Waktu pengumpulan</small><strong>' + date(a.submitted) + '</strong></span></div></section>'
+    ? '<section class="surface status-card" aria-labelledby="receipt-title"><div class="receipt-body"><div class="receipt-mark">' + icon('check', 34) + '</div><div><span class="pill good">Ujian selesai</span>' +
+      '<h2 id="receipt-title">Jawaban sudah dikumpulkan</h2><p>Panitia akan memeriksa jawaban dan menyampaikan hasil seleksi.</p></div></div>' +
+      '<div class="receipt-stats"><div class="receipt-stat">' + icon('clock', 20) + '<div><small>Waktu pengumpulan</small><strong>' + date(a.submitted) + '</strong></div></div>' +
+      '<div class="receipt-stat" id="tab-receipt" role="status">' + icon('flag', 20) + '<div><small>Aktivitas tab ujian</small><strong></strong></div></div></div></section>'
     : '<div class="participant-grid"><section class="surface exam-overview"><div class="exam-overview-top"><span class="login-symbol">' + icon('book', 22) +
     '</span><span class="pill ' + (open ? 'good' : '') + '">' + (open ? 'Ujian dibuka' : 'Ujian belum dibuka') + '</span></div><h2>Ujian Seleksi MPK</h2><p>Kerjakan soal reorganisasi dalam waktu yang disediakan.</p>' +
     '<div class="exam-meta"><div>' + icon('file') + ' <span><strong>' + state.config.total + '</strong><small>Jumlah soal</small></span></div><div>' + icon('clock') +
@@ -298,6 +338,7 @@ function participantView() {
     '</section><section class="surface rules-card"><div class="rules-title">' + icon('shield', 20) + '<h2>Peraturan Ujian</h2></div><ol class="instructions"><li>Waktu mulai berjalan saat kamu menekan Mulai Ujian. Browser yang mendukung akan masuk ke layar penuh.</li><li>Tetap di tab ujian. Berpindah tab, membuka aplikasi lain hingga halaman tersembunyi, atau keluar dari layar penuh akan memicu peringatan dan tercatat untuk panitia.</li><li>Kumpulkan jawaban sebelum waktu habis. Saat waktu habis sistem mengumpulkan jawaban yang sudah tersimpan.</li></ol></section></div>';
   const identity = state.user.cohort ? ' · ' + cohortLabel(state.user.cohort) + ' / ' + html(state.user.class) : '';
   shell(heading('UJIAN SELEKSI' + identity, 'Halo, ' + html(state.user.name), completed ? 'Terima kasih sudah mengikuti ujian seleksi MPK.' : 'Selamat datang di ujian reorganisasi MPK.') + detail);
+  if (completed) renderTabReceipt();
   app.querySelector('#refresh')?.addEventListener('click', () => route().catch(error => message(error.message, true)));
   app.querySelector('#accept-rules')?.addEventListener('change', event => { app.querySelector('#start').disabled = !event.target.checked; });
   app.querySelector('#start')?.addEventListener('click', async event => {
@@ -357,7 +398,7 @@ function examView() {
     ? '<label for="essay">Jawaban esai</label><textarea id="essay" rows="8" maxlength="3000" placeholder="Tulis jawabanmu di sini…">' + html(value) + '</textarea>'
     : '<fieldset class="options"><legend class="sr-only">Pilih satu jawaban</legend>' + item.options.map((option, i) => '<label class="option"><input type="radio" name="option" value="' + i + '"' + (value === i ? ' checked' : '') + '><span class="letter">' + letters[i] + '</span><span>' + html(option) + '</span></label>').join('') + '</fieldset>';
   const answered = items.filter(isAnswered).length;
-  shell('<section class="exam-top"><div><div class="eyebrow">UJIAN BERLANGSUNG</div><h1>Ujian Seleksi MPK</h1></div><div class="timer" aria-label="Sisa waktu">' + icon('clock') + '<strong id="remaining"></strong></div></section>' +
+  shell('<section class="exam-top"><div><div class="eyebrow">UJIAN BERLANGSUNG</div><h1>Ujian Seleksi MPK</h1></div><div class="timer">' + icon('clock') + '<span><small>Sisa waktu</small><strong id="remaining"></strong></span></div></section>' +
     '<div class="monitor-strip">' + icon('shield', 18) + '<span id="monitor-status"></span><span id="incident-count" role="status"></span></div>' +
     '<section id="exam-warning" class="exam-warning" aria-labelledby="warning-title" hidden>' + icon('info', 23) + '<div><h2 id="warning-title"></h2><p role="alert"></p></div><button class="primary small" type="button"></button></section>' +
     '<div class="exam-grid"><section class="surface question-panel"><div class="question-top"><span class="pill">Soal ' + (state.question + 1) + ' dari ' + items.length + '</span><span class="muted">' + (item.type === 'essay' ? 'Esai' : 'Pilihan ganda') + ' · ' + item.points + ' poin</span></div><h2>' + html(item.prompt) + '</h2>' + response +
@@ -375,6 +416,7 @@ function examView() {
     button.disabled = true;
     await enterFullscreen();
     guardReason = '';
+    guardIncident = null;
     renderGuard();
     const target = app.querySelector('.question-panel h2');
     if (target) {
