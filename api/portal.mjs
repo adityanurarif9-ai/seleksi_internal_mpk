@@ -6,7 +6,10 @@ let database;
 export default {
   async fetch(request) {
     if (!process.env.DATABASE_URL) {
-      return Response.json({ error: 'Database Supabase belum dikonfigurasi.' }, { status: 503 });
+      return Response.json({ error: 'Portal belum siap digunakan. Hubungi panitia MPK.' }, {
+        status: 503,
+        headers: { 'Cache-Control': 'no-store' },
+      });
     }
     try {
       database ??= postgresDatabase(supabasePool(process.env.DATABASE_URL));

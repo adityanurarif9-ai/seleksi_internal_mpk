@@ -50,7 +50,7 @@ async function api(path, data, keepalive = false) {
     method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(data), keepalive,
   });
   const result = await response.json();
-  if (!response.ok) throw new Error(result.error || 'Permintaan gagal.');
+  if (!response.ok) throw Object.assign(new Error(result.error || 'Permintaan gagal.'), { status: response.status });
   return result;
 }
 function message(text, error = false) {
@@ -675,5 +675,5 @@ try {
 } catch (error) {
   state.user = null;
   loginView();
-  message(error.message, true);
+  if (error.status !== 503) message(error.message, true);
 }
