@@ -86,8 +86,7 @@ function loginView() {
     '<p class="hero-intro">Kerjakan ujian seleksi calon pengurus MPK secara online melalui portal ini.</p>' +
     '<div class="hero-bottom">' + icon('people', 18) + '<span>Kelas X dan XI</span></div></div></section>' +
     '<section class="login-panel" aria-labelledby="login-title"><div class="login-content"><div class="login-symbol">' + icon('lock', 23) + '</div>' +
-    '<h2 id="login-title">Masuk ke portal</h2><p class="muted">Gunakan ID dan kata sandi dari panitia MPK.</p>' +
-    '<div class="role-switch" role="group" aria-label="Jenis akses"><button type="button" data-role="participant" aria-pressed="' + !admin + '">' + icon('user', 17) + ' Peserta</button><button type="button" data-role="admin" aria-pressed="' + admin + '">' + icon('shield', 17) + ' Admin</button></div>' +
+    '<h2 id="login-title">' + (admin ? 'Masuk sebagai admin' : 'Masuk sebagai peserta') + '</h2><p class="muted">' + (admin ? 'Gunakan akun panitia untuk mengelola seleksi MPK.' : 'Gunakan NIS dan kata sandi pada kartu akun peserta.') + '</p>' +
     '<form id="login-form"><label for="username">' + (admin ? 'ID Admin' : 'NIS / ID Peserta') + '</label><div class="input-icon">' + icon('user', 18) +
     '<input id="username" name="username" placeholder="' + (admin ? 'Masukkan ID admin' : 'Masukkan NIS atau ID peserta') + '" autocomplete="username" required maxlength="60"></div>' +
     '<label for="password">Kata Sandi</label><div class="input-icon">' + icon('lock', 18) +
@@ -96,14 +95,6 @@ function loginView() {
     '<div class="form-error" role="alert"></div><button class="primary login-button" type="submit">Masuk ' + icon('arrow', 19) + '</button></form>' +
     '<p class="login-help">' + icon('info', 16) + '<span>Kesulitan masuk? <strong>Hubungi panitia MPK.</strong></span></p></div>' +
     '<footer class="login-footer">© ' + new Date().getFullYear() + ' MPK SMK Telkom Purwokerto</footer></section></main>';
-  app.querySelectorAll('[data-role]').forEach(button => button.addEventListener('click', () => {
-    const next = button.dataset.role;
-    if (next === state.role) return;
-    state.role = next;
-    history.replaceState(null, '', next === 'admin' ? '/admin' : '/');
-    loginView();
-    app.querySelector('[data-role="' + next + '"]').focus();
-  }));
   app.querySelector('.show-password').addEventListener('click', event => {
     const button = event.currentTarget;
     const input = app.querySelector('#password');
