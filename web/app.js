@@ -143,6 +143,7 @@ function shell(content, inExam = false, inProfile = false) {
       await api('logout', {});
       clearTimeout(saveTimer);
       Object.assign(state, { user: null, page: 'overview', attempt: null, question: 0, flagged: new Set(), edit: null, review: null, cohort: '', classEdit: null, violationView: null });
+      Object.assign(state, { importRows: null, importText: '', importDone: false, questionCohort: '' });
       guardReason = '';
       guardIncident = null;
       hiddenDeparture = false;
@@ -534,7 +535,8 @@ function overview(data) {
 function questionForm(edit) {
   const choice = !edit || edit.type === 'choice';
   return '<section class="surface"><div class="section-head"><h2>' + (edit ? 'Edit Soal' : 'Tambah Soal') + '</h2>' + btn('close-edit', 'Batal') + '</div><form id="question-form" class="admin-form">' +
-    '<div class="form-row">' + stack('Jenis soal', '<select name="type"><option value="choice">Pilihan ganda</option><option value="essay"' + (choice ? '' : ' selected') + '>Esai</option></select>') +
+    '<div class="form-row">' + stack('Kategori kelas', '<select name="cohort" required><option value="">Pilih kelas</option>' + cohortOptions(edit?.cohort ?? state.questionCohort) + '</select>') +
+    stack('Jenis soal', '<select name="type"><option value="choice">Pilihan ganda</option><option value="essay"' + (choice ? '' : ' selected') + '>Esai</option></select>') +
     stack('Bobot poin', '<input name="points" type="number" min="1" max="100" value="' + (edit?.points ?? 10) + '" required>') + '</div>' +
     stack('Pertanyaan', '<textarea name="prompt" rows="3" maxlength="1500" required>' + html(edit?.prompt) + '</textarea>') +
     '<div class="form-row" id="choices"' + (choice ? '' : ' hidden') + '>' + letters.map((letter, i) => stack('Pilihan ' + letter, '<input name="option" maxlength="500" value="' + html(edit?.options?.[i]) + '"' + (choice ? ' required' : '') + '>')).join('') +
@@ -544,11 +546,16 @@ function questionForm(edit) {
 
 function questionsPanel(data) {
   if (state.edit) return questionForm(state.edit === 'new' ? null : data.questions.find(q => q.id === state.edit));
-  return '<section class="surface"><div class="section-head"><div><h2>Bank Soal</h2><p>Kelola soal pilihan ganda dan esai.</p></div>' + btn('add', icon('plus', 17) + ' Tambah Soal') + '</div>' +
-    (data.questions.length ? table(['Pertanyaan', 'Jenis', 'Bobot', 'Tindakan'], data.questions.map(q => [
-      html(q.prompt), q.type === 'choice' ? 'Pilihan ganda' : 'Esai', q.points + ' poin',
+  const filtered = data.questions.filter(q => !state.questionCohort || (q.cohort ?? 'unassigned') === state.questionCohort);
+  const legacy = data.questions.some(q => !q.cohort);
+  return '<section class="surface"><div class="section-head"><div><h2>Bank Soal</h2><p>Peserta menerima soal sesuai tingkat kelasnya.</p></div>' + btn('add', icon('plus', 17) + ' Tambah Soal') + '</div>' +
+    '<label class="cohort-filter">Kategori soal<select id="question-cohort-filter"><option value="">Semua kategori</option>' + cohortOptions(state.questionCohort) +
+    (legacy ? '<option value="unassigned"' + (state.questionCohort === 'unassigned' ? ' selected' : '') + '>Belum dikategorikan</option>' : '') + '</select></label>' +
+    (legacy ? '<p class="category-notice">Soal lama perlu dipilih kategorinya melalui Edit agar tersedia untuk ujian baru.</p>' : '') +
+    (filtered.length ? table(['Pertanyaan', 'Kelas', 'Jenis', 'Bobot', 'Tindakan'], filtered.map(q => [
+      html(q.prompt), q.cohort ? html(cohortLabel(q.cohort)) : 'Belum dikategorikan', q.type === 'choice' ? 'Pilihan ganda' : 'Esai', q.points + ' poin',
       '<div class="actions">' + btn('edit', 'Edit', 'data-id="' + q.id + '"') + btn('delete', 'Hapus', 'data-id="' + q.id + '"') + '</div>',
-    ])) : empty('Belum ada soal. Tambahkan soal untuk membuka ujian.')) + '</section>';
+    ]), true) : empty('Belum ada soal pada kategori ini.')) + '</section>';
 }
 
 function cohortOptions(selected) {
@@ -574,10 +581,62 @@ function participantPanel(data) {
       stack('Kata sandi awal', '<input name="password" type="password" autocomplete="new-password" minlength="8" maxlength="150" required>')) +
     '</div>' + err + saveButton(edit ? 'Simpan Kelas' : 'Tambah Peserta') + '</form></section>';
   const users = filteredParticipants(data);
-  return form + '<section class="surface list-surface"><div class="section-head"><h2>Daftar Peserta</h2>' + cohortFilter(data) + '</div>' +
+  return importPanel() + form + '<section class="surface list-surface"><div class="section-head"><h2>Daftar Peserta</h2>' + cohortFilter(data) + '</div>' +
     (users.length ? table(['Nama', 'Tingkat', 'Rombel', 'ID Peserta', 'Tindakan'], users.map(user => [
       html(user.name), html(cohortLabel(user.cohort)), html(user.class), html(user.username), btn('edit-class', 'Edit Kelas', 'data-id="' + user.id + '"'),
     ]), true) : empty('Belum ada akun peserta pada kelas ini.')) + '</section>';
+}
+
+function importPanel() {
+  return '<section class="surface import-panel"><div class="section-head"><div><h2>Impor Peserta Massal</h2><p>Tempel nama peserta, satu nama per baris. Maksimal 50 peserta per impor.</p></div></div>' +
+    '<form id="import-form" class="admin-form">' + stack('Tingkat untuk daftar nama', '<select name="cohort">' + cohortOptions(state.importCohort ?? 'X') + '</select>') +
+    '<label class="field">Daftar peserta<textarea name="participants" rows="5" maxlength="20000" required placeholder="Nama lengkap pertama&#10;Nama lengkap kedua&#10;Nama lengkap | X TKJ 1 | 12345">' + html(state.importText ?? '') +
+    '</textarea></label><p class="muted">Rombel dan NIS bisa menyusul. Jika sudah ada, gunakan format Nama | Rombel | ID. ID kosong dan kata sandi awal dibuat otomatis.</p>' +
+    err + '<div class="actions"><button class="secondary" type="submit">Pratinjau Daftar</button></div></form>' +
+    (state.importRows ? '<div class="import-preview"><h3>Pratinjau ' + state.importRows.length + ' akun</h3>' +
+      table(['Nama', 'Tingkat', 'Rombel', 'ID peserta'], state.importRows.map(row => [html(row.name), cohortLabel(row.cohort), html(row.class), html(row.username)]), true) +
+      '<p class="muted">Setelah berhasil, unduh daftar akun untuk membagikan akses kepada masing-masing peserta.</p>' +
+      (state.importDone ? '<button class="primary" data-action="download-accounts">Unduh Akun (CSV)</button>' : '<button class="primary" data-action="confirm-import">Buat Semua Akun</button>') + '</div>' : '') + '</section>';
+}
+
+async function previewImport(text, defaultCohort) {
+  const lines = text.split(/\r?\n/).map(line => line.trim()).filter(Boolean);
+  if (!lines.length || lines.length > 50) throw new Error('Masukkan 1–50 baris peserta.');
+  const rows = [];
+  for (const [index, line] of lines.entries()) {
+    const parts = line.split('|').map(value => value.trim());
+    const name = parts[0];
+    const className = parts[1] || defaultCohort;
+    const suppliedId = parts[2];
+    if (parts.length > 3 || !name || name.length > 100 || !className || className.length > 40) throw new Error('Periksa nama dan rombel pada baris ' + (index + 1) + '.');
+    const level = className.match(/^(XI|X|11|10)(?:\s|$)/i)?.[1].toUpperCase();
+    const cohort = ['XI', '11'].includes(level) ? 'XI' : ['X', '10'].includes(level) ? 'X' : '';
+    if (!cohort) throw new Error('Rombel pada baris ' + (index + 1) + ' harus diawali X, XI, 10, atau 11.');
+    const bytes = await crypto.subtle.digest('SHA-256', new TextEncoder().encode(name.toLowerCase() + '|' + className.toLowerCase()));
+    const hash = Array.from(new Uint8Array(bytes), byte => byte.toString(16).padStart(2, '0')).join('').slice(0, 14);
+    const username = suppliedId?.toLowerCase() || 'mpk-' + hash;
+    if (!/^[a-z0-9._-]{3,60}$/.test(username) || username === 'admin') throw new Error('ID peserta pada baris ' + (index + 1) + ' tidak valid.');
+    const password = crypto.randomUUID().replaceAll('-', '').slice(0, 14);
+    rows.push({ name, class: className, cohort, username, password });
+  }
+  if (new Set(rows.map(row => row.username)).size !== rows.length) throw new Error('Ada nama/rombel atau ID yang berulang.');
+  const existing = new Set(state.admin.participants.map(user => user.username));
+  if (rows.some(row => existing.has(row.username))) throw new Error('Ada ID yang sudah terdaftar. Periksa daftar peserta.');
+  state.importText = text;
+  state.importCohort = defaultCohort;
+  state.importRows = rows;
+  state.importDone = false;
+}
+
+function downloadAccounts() {
+  const cell = value => '"' + (String(value).match(/^[=+@\-\t\r]/) ? "'" : '') + String(value).replaceAll('"', '""') + '"';
+  const rows = [['Nama', 'Tingkat', 'Rombel', 'ID Peserta', 'Kata Sandi Awal'], ...state.importRows.map(row => [row.name, row.cohort, row.class, row.username, row.password])];
+  const url = URL.createObjectURL(new Blob(['\uFEFF' + rows.map(row => row.map(cell).join(',')).join('\r\n')], { type: 'text/csv;charset=utf-8' }));
+  const link = document.createElement('a');
+  link.href = url;
+  link.download = 'akun-peserta-mpk.csv';
+  link.click();
+  setTimeout(() => URL.revokeObjectURL(url), 1000);
 }
 
 function reviewPanel(row, user) {
@@ -656,6 +715,14 @@ function adminView() {
       adminView();
     },
     'close-violations': () => { state.violationView = null; adminView(); },
+    'confirm-import': async () => {
+      const result = await api('admin/participants/import', { rows: state.importRows });
+      state.importDone = true;
+      state.admin = await api('admin/dashboard');
+      adminView();
+      message(result.count + ' akun siap. Unduh daftar akun sebelum menutup halaman.');
+    },
+    'download-accounts': downloadAccounts,
     reload: () => loadAdmin(),
   };
   app.querySelectorAll('[data-action]').forEach(button => button.addEventListener('click', async () => {
@@ -675,7 +742,17 @@ function adminView() {
     adminView();
     app.querySelector('#cohort-filter').focus();
   });
+  app.querySelector('#question-cohort-filter')?.addEventListener('change', event => {
+    state.questionCohort = event.target.value;
+    adminView();
+    app.querySelector('#question-cohort-filter').focus();
+  });
   const forms = {
+    'import-form': async data => {
+      await previewImport(data.get('participants'), data.get('cohort'));
+      adminView();
+      app.querySelector('.import-preview').scrollIntoView({ behavior: 'smooth', block: 'start' });
+    },
     'settings-form': async data => {
       await api('admin/settings', { duration: data.get('duration'), open: data.get('open') === '1' });
       await loadAdmin();

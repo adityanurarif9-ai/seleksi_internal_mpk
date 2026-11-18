@@ -40,9 +40,10 @@ async function currentUser(db, raw) {
     .bind(await hash(raw), Date.now()).first();
 }
 
-async function settings(db) {
+async function settings(db, cohort) {
   const row = await db.prepare('SELECT duration, is_open FROM settings WHERE id=1').first();
   const count = await db.prepare('SELECT count(*) AS total FROM questions').first();
+  if (cohort !== undefined) return { ...row, total: ['X', 'XI'].includes(cohort) ? (await questions(db)).filter(item => item.cohort === cohort).length : 0 };
   return { ...row, total: count.total };
 }
 
@@ -87,6 +88,17 @@ function answersFor(items, input) {
 
 function field(value, max) {
   return typeof value === 'string' ? value.trim().slice(0, max) : '';
+}
+
+function participantInput(input) {
+  const username = field(input.username, 60).toLowerCase();
+  const name = field(input.name, 100);
+  const className = field(input.class, 40);
+  const password = typeof input.password === 'string' ? input.password : '';
+  if (!/^[a-z0-9._-]{3,60}$/.test(username) || username === 'admin') fail('ID peserta harus 3–60 karakter, berupa huruf, angka, titik, strip, atau garis bawah.');
+  if (!name || !className || password.length < 8 || password.length > 150) fail('Isi nama dan rombel, lalu gunakan kata sandi 8–150 karakter.');
+  if (!['X', 'XI'].includes(input.cohort)) fail('Pilih tingkat kelas X atau XI.');
+  return { username, name, className, password, cohort: input.cohort };
 }
 
 async function limit(db, key, max) {
@@ -152,14 +164,15 @@ async function api(request, env, path) {
   }
   if (user.role !== 'participant') fail('Akses khusus peserta.', 403);
   if (path === '/api/exam' && method === 'GET') {
-    return json({ settings: await settings(db), attempt: publicAttempt(await attempt(db, user.id)), now: Date.now() });
+    return json({ settings: await settings(db, user.cohort), attempt: publicAttempt(await attempt(db, user.id)), now: Date.now() });
   }
   if (path === '/api/exam/start' && method === 'POST') {
     const existing = await attempt(db, user.id);
     if (existing) return json({ attempt: publicAttempt(existing), now: Date.now() });
     const config = await settings(db);
-    const items = await questions(db);
-    if (!config.is_open || !items.length) fail('Ujian belum dibuka oleh panitia.', 409);
+    if (!['X', 'XI'].includes(user.cohort)) fail('Tingkat kelas belum ditentukan. Hubungi panitia.', 409);
+    const items = (await questions(db)).filter(item => item.cohort === user.cohort);
+    if (!config.is_open || !items.length) fail('Soal ujian untuk kelasmu belum tersedia atau ujian belum dibuka.', 409);
     const now = Date.now();
     await db.prepare('INSERT INTO attempts (user_id,snapshot,started,deadline) SELECT ?,?,?,? WHERE (SELECT is_open FROM settings WHERE id=1)=1 ON CONFLICT (user_id) DO NOTHING')
       .bind(user.id, stringify(items), now, now + config.duration * 60000).run();
@@ -228,18 +241,38 @@ async function admin(db, path, method, body) {
     return json({});
   }
   if (path === '/api/admin/participants' && method === 'POST') {
-    const input = await body();
-    const username = field(input.username, 60).toLowerCase();
-    const name = field(input.name, 100);
-    const className = field(input.class, 40);
-    const password = typeof input.password === 'string' ? input.password : '';
-    if (!/^[a-z0-9._-]{3,60}$/.test(username) || username === 'admin') fail('ID peserta harus 3–60 karakter, berupa huruf, angka, titik, strip, atau garis bawah.');
-    if (!name || !className || password.length < 8 || password.length > 150) fail('Isi nama dan rombel, lalu gunakan kata sandi 8–150 karakter.');
-    if (!['X', 'XI'].includes(input.cohort)) fail('Pilih tingkat kelas X atau XI.');
+    const { username, name, className, password, cohort } = participantInput(await body());
     const result = await db.prepare("INSERT INTO users (id, username, name, class, password, role, cohort) VALUES (?,?,?,?,?,'participant',?) ON CONFLICT (username) DO NOTHING")
-      .bind(crypto.randomUUID(), username, name, className, await passwordHash(password), input.cohort).run();
+      .bind(crypto.randomUUID(), username, name, className, await passwordHash(password), cohort).run();
     if (!result.meta.changes) fail('ID peserta sudah digunakan.', 409);
     return json({}, 201);
+  }
+  if (path === '/api/admin/participants/import' && method === 'POST') {
+    const input = await body();
+    if (!Array.isArray(input.rows) || input.rows.length < 1 || input.rows.length > 50) fail('Impor 1–50 peserta sekaligus.');
+    const rows = input.rows.map(participantInput);
+    if (new Set(rows.map(row => row.username)).size !== rows.length) fail('Ada ID peserta yang berulang dalam daftar.');
+    const inserts = [];
+    for (const row of rows) {
+      const existing = await db.prepare('SELECT * FROM users WHERE username=?').bind(row.username).first();
+      if (existing) {
+        const samePassword = equal(await passwordHash(row.password, existing.password.split('.')[0]), existing.password);
+        if (existing.role !== 'participant' || existing.name !== row.name || existing.class !== row.className || existing.cohort !== row.cohort || !samePassword) {
+          fail('ID ' + row.username + ' sudah digunakan. Periksa daftar sebelum mengimpor.', 409);
+        }
+        continue;
+      }
+      inserts.push(db.prepare("INSERT INTO users (id, username, name, class, password, role, cohort) VALUES (?,?,?,?,?,'participant',?)")
+        .bind(crypto.randomUUID(), row.username, row.name, row.className, await passwordHash(row.password), row.cohort));
+    }
+    if (inserts.length) {
+      try { await db.batch(inserts); }
+      catch (error) {
+        if (error.code === '23505' || /UNIQUE constraint failed/i.test(error.message)) fail('Daftar akun berubah saat impor. Coba lagi dengan daftar yang sama.', 409);
+        throw error;
+      }
+    }
+    return json({ count: rows.length, created: inserts.length });
   }
   if (path === '/api/admin/participants/class' && method === 'POST') {
     const input = await body();
@@ -258,7 +291,8 @@ async function admin(db, path, method, body) {
     const prompt = field(input.prompt, 1500);
     const points = Number(input.points);
     if (!['choice', 'essay'].includes(type) || !prompt || !Number.isInteger(points) || points < 1 || points > 100) fail('Isi pertanyaan dan bobot 1–100.');
-    const item = { id, type, prompt, points };
+    if (!['X', 'XI'].includes(input.cohort)) fail('Pilih kategori soal kelas X atau XI.');
+    const item = { id, type, prompt, points, cohort: input.cohort };
     if (type === 'choice') {
       const options = Array.isArray(input.options) ? input.options.map(value => field(value, 500)) : [];
       const correct = Number(input.correct);

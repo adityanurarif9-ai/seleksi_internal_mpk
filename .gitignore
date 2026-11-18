@@ -6,3 +6,4 @@ dist/
 node_modules/
 .vercel/
 supabase/.temp/
+/akun-peserta-kelas-x.csv
