@@ -1,4 +1,5 @@
 import pg from 'pg';
+import { readFileSync } from 'node:fs';
 
 const tables = /\b(FROM|INTO|UPDATE|JOIN) (users|sessions|login_limits|questions|settings|attempts|violations)\b/g;
 const numericType = 20;
@@ -50,7 +51,10 @@ export function supabasePool(connectionString) {
   url.searchParams.delete('sslmode');
   const pool = new pg.Pool({
     connectionString: url.href,
-    ssl: { rejectUnauthorized: true },
+    ssl: {
+      rejectUnauthorized: true,
+      ca: readFileSync(new URL('./certificates/supabase-ca.crt', import.meta.url), 'utf8'),
+    },
     types,
     max: 1,
     idleTimeoutMillis: 10000,
