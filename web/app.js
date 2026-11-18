@@ -134,7 +134,7 @@ function shell(content, inExam = false, inProfile = false) {
       await api('logout', {});
       clearTimeout(saveTimer);
       Object.assign(state, { user: null, page: 'overview', attempt: null, question: 0, flagged: new Set(), edit: null, review: null, cohort: '', classEdit: null, violationView: null });
-      Object.assign(state, { importRows: null, importText: '', importDone: false, questionCohort: '' });
+      Object.assign(state, { importRows: null, importText: '', importDone: false, questionCohort: '', questionImport: null, showQuestionImport: false });
       guardReason = '';
       guardIncident = null;
       hiddenDeparture = false;
@@ -539,7 +539,7 @@ function questionsPanel(data) {
   if (state.edit) return questionForm(state.edit === 'new' ? null : data.questions.find(q => q.id === state.edit));
   const filtered = data.questions.filter(q => !state.questionCohort || (q.cohort ?? 'unassigned') === state.questionCohort);
   const legacy = data.questions.some(q => !q.cohort);
-  return '<section class="surface"><div class="section-head"><div><h2>Bank Soal</h2><p>Peserta menerima soal sesuai tingkat kelasnya.</p></div>' + btn('add', icon('plus', 17) + ' Tambah Soal') + '</div>' +
+  return questionImportPanel(data) + '<section class="surface"><div class="section-head"><div><h2>Bank Soal</h2><p>Peserta menerima soal sesuai tingkat kelasnya.</p></div><div class="actions">' + btn('open-question-import', 'Unggah Word / Excel') + btn('add', icon('plus', 17) + ' Tambah Soal') + '</div></div>' +
     '<label class="cohort-filter">Kategori soal<select id="question-cohort-filter"><option value="">Semua kategori</option>' + cohortOptions(state.questionCohort) +
     (legacy ? '<option value="unassigned"' + (state.questionCohort === 'unassigned' ? ' selected' : '') + '>Belum dikategorikan</option>' : '') + '</select></label>' +
     (legacy ? '<p class="category-notice">Soal lama perlu dipilih kategorinya melalui Edit agar tersedia untuk ujian baru.</p>' : '') +
@@ -547,6 +547,23 @@ function questionsPanel(data) {
       html(q.prompt), q.cohort ? html(cohortLabel(q.cohort)) : 'Belum dikategorikan', q.type === 'choice' ? 'Pilihan ganda' : 'Esai', q.points + ' poin',
       '<div class="actions">' + btn('edit', 'Edit', 'data-id="' + q.id + '"') + btn('delete', 'Hapus', 'data-id="' + q.id + '"') + '</div>',
     ]), true) : empty('Belum ada soal pada kategori ini.')) + '</section>';
+}
+
+function questionImportPanel(data) {
+  if (!state.showQuestionImport) return '';
+  const preview = state.questionImport;
+  const remaining = 100 - data.questions.length;
+  return '<section class="surface question-import-panel"><div class="section-head"><div><h2>Impor soal dari berkas</h2><p>Unggah Word (.docx) atau Excel (.xlsx), maksimal 5 MB. Tersedia ' + remaining + ' slot soal.</p></div>' + btn('close-question-import', 'Tutup') + '</div>' +
+    '<div class="template-links"><a class="secondary small" href="/templates/soal-mpk.docx" download>Unduh Template Word</a><a class="secondary small" href="/templates/soal-mpk.xlsx" download>Unduh Template Excel</a></div>' +
+    '<p class="muted import-guidance">Isi soal teks pilihan ganda atau esai pada template. Kunci pilihan ganda: A–D. Kolom kelas yang kosong mengikuti pilihan di bawah. Excel dibaca dari lembar pertama yang terlihat.</p>' +
+    '<form id="question-import-form" class="admin-form"><div class="form-row">' + stack('Kelas jika tidak tertulis di berkas', '<select name="cohort">' + cohortOptions(state.questionImportCohort ?? (['X', 'XI'].includes(state.questionCohort) ? state.questionCohort : 'X')) + '</select>') +
+    stack('Berkas soal', '<input type="file" name="file" accept=".docx,.xlsx" required>') + '</div>' + err + saveButton('Baca dan Pratinjau Soal') + '</form>' +
+    (preview ? '<div class="import-preview" id="question-import-preview" tabindex="-1"><h3>Pratinjau ' + preview.rows.length + ' soal</h3><p class="muted">' + html(preview.name) + ' · Periksa pertanyaan, kunci, bobot, dan kelas sebelum menyimpan.</p>' +
+      (preview.errors.length ? '<div class="import-errors" role="alert"><strong>Perbaiki berkas lalu unggah ulang. Belum ada soal disimpan.</strong><ul>' + preview.errors.map(e => '<li>' + html(e) + '</li>').join('') + '</ul></div>' : '') +
+      (preview.rows.length > remaining ? '<p class="form-error" role="alert">Jumlah soal melebihi kapasitas bank soal. Kurangi isi berkas atau hapus soal yang tidak digunakan.</p>' : '') +
+      '<div class="question-preview-list">' + preview.rows.map((q, i) => '<article class="question-preview-item"><div class="question-preview-meta"><strong>Soal ' + (i + 1) + '</strong><span>' + html(q.cohort ?? 'Kelas belum valid') + ' · ' + (q.type === 'essay' ? 'Esai' : 'Pilihan ganda') + ' · ' + html(q.points) + ' poin</span></div><p class="preserve-lines">' + html(q.prompt) + '</p>' +
+        (q.type === 'choice' ? '<ol type="A">' + q.options.map((o, n) => '<li' + (q.correct === n ? ' class="correct-option"' : '') + '>' + html(o) + (q.correct === n ? ' <strong>✓ Kunci</strong>' : '') + '</li>').join('') + '</ol><p class="muted">Kunci: ' + (letters[q.correct] ?? 'Belum valid') + '</p>' : '') + '</article>').join('') + '</div>' +
+      '<div class="actions">' + (!preview.errors.length && preview.rows.length <= remaining ? '<button class="primary" data-action="save-question-import">Simpan ' + preview.rows.length + ' Soal ke Bank Soal</button>' : '') + btn('discard-question-import', 'Batal Impor') + '</div></div>' : '') + '</section>';
 }
 
 function cohortOptions(selected) {
@@ -681,6 +698,20 @@ function adminView() {
     catch (error) { message(error.message, true); }
   }));
   const actions = {
+    'open-question-import': () => { state.showQuestionImport = true; adminView(); app.querySelector('#question-import-form input[type="file"]').focus(); },
+    'close-question-import': () => { state.showQuestionImport = false; state.questionImport = null; adminView(); },
+    'discard-question-import': () => { state.questionImport = null; adminView(); },
+    'save-question-import': async () => {
+      if (state.savingQuestionImport || !state.questionImport || state.questionImport.errors.length) return;
+      state.savingQuestionImport = true;
+      try {
+        const result = await api('admin/questions/import', { rows: state.questionImport.rows });
+        state.questionImport = null;
+        state.showQuestionImport = false;
+        await loadAdmin();
+        message(result.count + ' soal berhasil disimpan.');
+      } finally { state.savingQuestionImport = false; }
+    },
     add: () => { state.edit = 'new'; adminView(); },
     edit: id => { state.edit = id; adminView(); },
     'close-edit': () => { state.edit = null; adminView(); },
@@ -739,6 +770,18 @@ function adminView() {
     app.querySelector('#question-cohort-filter').focus();
   });
   const forms = {
+    'question-import-form': async data => {
+      state.questionImport = null;
+      app.querySelector('#question-import-preview')?.remove();
+      const { readQuestionFile } = await import('./question-import.js');
+      const file = data.get('file');
+      const preview = await readQuestionFile(file, data.get('cohort'));
+      if (state.page !== 'questions' || state.user?.role !== 'admin') return;
+      state.questionImportCohort = data.get('cohort');
+      state.questionImport = { ...preview, name: file.name };
+      adminView();
+      app.querySelector('#question-import-preview').focus();
+    },
     'import-form': async data => {
       await previewImport(data.get('participants'), data.get('cohort'));
       adminView();

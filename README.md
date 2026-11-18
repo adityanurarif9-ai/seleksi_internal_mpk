@@ -22,6 +22,12 @@ Mode normal menyimpan data di `portal.sqlite`. Jalankan `node local.mjs --previe
 4. Bagikan akses situs beserta akun masing-masing peserta. Satu akun dapat mengikuti satu percobaan. Perubahan soal dan durasi berlaku untuk percobaan yang belum dimulai.
 5. Buka **Hasil Ujian** untuk melihat pengumpulan, nilai, dan jumlah pelanggaran. Gunakan filter **Tingkat kelas** dan klik jumlah pelanggaran untuk melihat waktu serta jenis kejadiannya.
 
+### Impor soal dari Word atau Excel
+
+Di **Bank Soal**, pilih **Unggah Word / Excel**, lalu unduh template `.docx` atau `.xlsx`. Ganti soal contoh dengan soal ujian. Format Word menggunakan nomor yang diketik langsung (`1. Pertanyaan`), pilihan `A.` sampai `D.`, serta baris `Jenis: PG`, `Kunci: A`, `Bobot: 10`, dan `Kelas: X`. Untuk esai, gunakan `Jenis: Esai` dan kosongkan pilihan serta kunci. Excel menggunakan satu baris per soal pada lembar pertama yang terlihat. Header berbahasa Inggris seperti `Question Text`, `Question Type`, `Option 1`–`Option 4`, dan `Correct Answer` juga diterima; kunci angka memakai 1–4.
+
+Pilih kelas bawaan untuk soal yang tidak mencantumkan kelas. Isi kelas X/XI di berkas jika ingin mencampur kedua kategori. Klik **Baca dan Pratinjau Soal**, periksa pertanyaan dan kunci, lalu **Simpan**. Jika ada kesalahan, perbaiki berkas dan unggah ulang. Belum ada perubahan bank soal sebelum disimpan. Batas: 5 MB per berkas, 100 soal per impor dan per bank soal, teks tanpa gambar/persamaan, serta nilai Excel tanpa rumus. `.doc` dan `.xls` perlu disimpan ulang menjadi `.docx` dan `.xlsx`.
+
 ## Layar penuh dan pelanggaran
 
 Saat peserta menekan **Mulai Ujian**, portal meminta layar penuh jika browser mendukung. Ketika tab ujian tersembunyi atau peserta keluar dari layar penuh, portal menampilkan peringatan dan menyimpan kejadian untuk panitia. Dua sinyal dari kejadian yang sama dicatat sekali sebelum peserta memilih untuk melanjutkan. Timer tetap berjalan saat peringatan tampil. Peserta tetap bisa mengerjakan di browser yang tidak mendukung layar penuh, dengan pemantauan visibilitas tab.

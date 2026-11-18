@@ -28,12 +28,17 @@ export function postgresDatabase(pool) {
   return {
     prepare,
     questionOrder: 'position',
-    async batch(statements) {
+    async batch(statements, options = {}) {
       const client = await pool.connect();
       let discard = false;
       try {
         await client.query('BEGIN');
+        if (options.questionLimit) await client.query('LOCK TABLE mpk.questions IN SHARE ROW EXCLUSIVE MODE');
         for (const statement of statements) await statement.execute(client);
+        if (options.questionLimit) {
+          const { rows: [count] } = await client.query('SELECT count(*) AS total FROM mpk.questions');
+          if (Number(count.total) > options.questionLimit) throw Object.assign(new Error('Bank soal penuh.'), { code: 'QUESTION_LIMIT' });
+        }
         await client.query('COMMIT');
       } catch (error) {
         try { await client.query('ROLLBACK'); }

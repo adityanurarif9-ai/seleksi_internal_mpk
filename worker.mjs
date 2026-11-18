@@ -52,6 +52,23 @@ async function questions(db) {
   return data.results.map(q => parse(q.body));
 }
 
+function questionInput(input, id) {
+  if (!input || typeof input !== 'object') fail('Format soal tidak valid.');
+  const type = input.type;
+  const prompt = typeof input.prompt === 'string' ? input.prompt.trim() : '';
+  const points = Number(input.points);
+  if (!['choice', 'essay'].includes(type) || !prompt || prompt.length > 1500 || !Number.isInteger(points) || points < 1 || points > 100) fail('Isi pertanyaan maksimal 1.500 karakter dan bobot 1–100.');
+  if (!['X', 'XI'].includes(input.cohort)) fail('Pilih kategori soal kelas X atau XI.');
+  const item = { id, type, prompt, points, cohort: input.cohort };
+  if (type === 'choice') {
+    const options = Array.isArray(input.options) ? input.options.map(value => typeof value === 'string' ? value.trim() : '') : [];
+    const correct = Number(input.correct);
+    if (options.length !== 4 || options.some(value => !value || value.length > 500) || input.correct === '' || input.correct == null || ![0, 1, 2, 3].includes(correct)) fail('Isi empat pilihan maksimal 500 karakter dan tentukan kunci jawaban.');
+    Object.assign(item, { options, correct });
+  }
+  return item;
+}
+
 async function attempt(db, id) {
   const now = Date.now();
   await db.prepare('UPDATE attempts SET submitted=deadline WHERE user_id=? AND submitted IS NULL AND deadline<=?').bind(id, now).run();
@@ -121,7 +138,7 @@ async function api(request, env, path) {
   }
   const body = async () => {
     const content = await request.text();
-    if (content.length > 330000) fail('Data terlalu besar.', 413);
+    if (content.length > 600000) fail('Data terlalu besar.', 413);
     try { return parse(content) ?? {}; } catch { fail('Data tidak valid.'); }
   };
   if (path === '/api/login' && method === 'POST') {
@@ -287,18 +304,7 @@ async function admin(db, path, method, body) {
     const input = await body();
     const existing = typeof input.id === 'string' && input.id;
     const id = existing || crypto.randomUUID();
-    const type = input.type;
-    const prompt = field(input.prompt, 1500);
-    const points = Number(input.points);
-    if (!['choice', 'essay'].includes(type) || !prompt || !Number.isInteger(points) || points < 1 || points > 100) fail('Isi pertanyaan dan bobot 1–100.');
-    if (!['X', 'XI'].includes(input.cohort)) fail('Pilih kategori soal kelas X atau XI.');
-    const item = { id, type, prompt, points, cohort: input.cohort };
-    if (type === 'choice') {
-      const options = Array.isArray(input.options) ? input.options.map(value => field(value, 500)) : [];
-      const correct = Number(input.correct);
-      if (options.length !== 4 || options.some(value => !value) || ![0, 1, 2, 3].includes(correct)) fail('Isi empat pilihan dan tentukan kunci jawaban.');
-      Object.assign(item, { options, correct });
-    }
+    const item = questionInput(input, id);
     if (existing) {
       const result = await db.prepare('UPDATE questions SET body=? WHERE id=?').bind(stringify(item), id).run();
       if (!result.meta.changes) fail('Soal sudah dihapus.', 404);
@@ -307,6 +313,31 @@ async function admin(db, path, method, body) {
       if (!result.meta.changes) fail('Bank soal sudah mencapai 100 soal.', 409);
     }
     return json({});
+  }
+  if (path === '/api/admin/questions/import' && method === 'POST') {
+    const input = await body();
+    if (!Array.isArray(input.rows) || input.rows.length < 1 || input.rows.length > 100) fail('Impor 1–100 soal sekaligus.');
+    const rows = input.rows.map((row, i) => {
+      if (!/^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i.test(row?.id ?? '')) fail('ID soal ' + (i + 1) + ' tidak valid. Unggah ulang berkas.');
+      try { return questionInput(row, row.id); }
+      catch (error) { fail('Soal ' + (i + 1) + ': ' + error.message); }
+    });
+    if (new Set(rows.map(q => q.id)).size !== rows.length) fail('Ada ID soal yang berulang. Unggah ulang berkas.');
+    const existing = new Map((await questions(db)).map(q => [q.id, q]));
+    const inserts = [];
+    for (const row of rows) {
+      if (existing.has(row.id)) {
+        if (stringify(questionInput(existing.get(row.id), row.id)) !== stringify(row)) fail('Daftar soal berubah. Unggah ulang berkas.', 409);
+      } else inserts.push(db.prepare('INSERT INTO questions (id, body) VALUES (?,?) ON CONFLICT (id) DO NOTHING').bind(row.id, stringify(row)));
+    }
+    if (inserts.length) {
+      try { await db.batch(inserts, { questionLimit: 100 }); }
+      catch (error) {
+        if (error.code === 'QUESTION_LIMIT') fail('Bank soal maksimal 100 soal. Kurangi jumlah soal yang diimpor.', 409);
+        throw error;
+      }
+    }
+    return json({ count: rows.length });
   }
   if (path === '/api/admin/questions/delete' && method === 'POST') {
     const { id } = await body();

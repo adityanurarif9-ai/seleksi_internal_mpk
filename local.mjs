@@ -34,10 +34,13 @@ export function createLocalEnvironment(filename = ':memory:', password) {
       });
       return { ...bind(), bind };
     },
-    batch(statements) {
+    batch(statements, options = {}) {
       sqlite.exec('BEGIN');
       try {
         const results = statements.map(statement => statement.run());
+        if (options.questionLimit && sqlite.prepare('SELECT count(*) AS total FROM questions').get().total > options.questionLimit) {
+          throw Object.assign(new Error('Bank soal penuh.'), { code: 'QUESTION_LIMIT' });
+        }
         sqlite.exec('COMMIT');
         return results;
       } catch (error) {
@@ -50,13 +53,17 @@ export function createLocalEnvironment(filename = ':memory:', password) {
   for (const [url, file, type] of [
     ['/', 'index.html', 'text/html'],
     ['/app.js', 'app.js', 'text/javascript'],
+    ['/question-import.js', 'question-import.js', 'text/javascript'],
+    ['/vendor/fflate.js', 'vendor/fflate.js', 'text/javascript'],
+    ['/templates/soal-mpk.docx', 'templates/soal-mpk.docx', 'application/vnd.openxmlformats-officedocument.wordprocessingml.document'],
+    ['/templates/soal-mpk.xlsx', 'templates/soal-mpk.xlsx', 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet'],
     ['/style.css', 'style.css', 'text/css'],
     ['/mark.svg', 'mark.svg', 'image/svg+xml'],
     ['/favicon-mpk.svg', 'favicon-mpk.svg', 'image/svg+xml'],
     ['/logo-mpk.png', 'logo-mpk.png', 'image/png'],
     ['/exam-atmosphere.jpg', 'exam-atmosphere.jpg', 'image/jpeg'],
   ]) {
-    const encoding = type === 'image/png' || type === 'image/jpeg' ? undefined : 'utf8';
+    const encoding = /\.(png|jpg|docx|xlsx)$/.test(file) ? undefined : 'utf8';
     assets[url] = [type, readFileSync(new URL('./web/' + file, import.meta.url), encoding)];
   }
   return { DB: db, ASSETS: assets, ADMIN_PASSWORD: password, close: () => sqlite.close(), hasAdmin: () => !!sqlite.prepare("SELECT 1 FROM users WHERE role='admin'").get() };
@@ -75,7 +82,7 @@ if (process.argv[1] && import.meta.url === pathToFileURL(process.argv[1]).href) 
       let length = 0;
       for await (const chunk of incoming) {
         length += chunk.length;
-        if (length > 350000) {
+        if (length > 2 * 1024 * 1024) {
           outgoing.writeHead(413).end('Data terlalu besar.');
           return;
         }
