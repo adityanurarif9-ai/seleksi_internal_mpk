@@ -52,6 +52,7 @@ export function createLocalEnvironment(filename = ':memory:', password) {
     ['/app.js', 'app.js', 'text/javascript'],
     ['/style.css', 'style.css', 'text/css'],
     ['/mark.svg', 'mark.svg', 'image/svg+xml'],
+    ['/favicon-mpk.svg', 'favicon-mpk.svg', 'image/svg+xml'],
     ['/logo-mpk.png', 'logo-mpk.png', 'image/png'],
     ['/exam-atmosphere.jpg', 'exam-atmosphere.jpg', 'image/jpeg'],
   ]) {

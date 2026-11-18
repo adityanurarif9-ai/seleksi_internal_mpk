@@ -8,6 +8,7 @@ for (const [path, file, type] of [
   ['/style.css', 'style.css', 'text/css'],
   ['/app.js', 'app.js', 'text/javascript'],
   ['/mark.svg', 'mark.svg', 'image/svg+xml'],
+  ['/favicon-mpk.svg', 'favicon-mpk.svg', 'image/svg+xml'],
   ['/logo-mpk.png', 'logo-mpk.png', 'image/png'],
   ['/exam-atmosphere.jpg', 'exam-atmosphere.jpg', 'image/jpeg'],
 ]) {
