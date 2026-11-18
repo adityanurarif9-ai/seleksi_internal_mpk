@@ -30,8 +30,8 @@ const aliases = [
   ['pilihanb', 'opsib', 'b', 'option2', 'optionb'],
   ['pilihanc', 'opsic', 'c', 'option3', 'optionc'],
   ['pilihand', 'opsid', 'd', 'option4', 'optiond'],
-  ['kunci', 'jawaban', 'kuncijawaban', 'correctanswer', 'answer'],
-  ['bobot', 'poin', 'points', 'bobotpoin'],
+  ...['a', 'b', 'c', 'd'].map((letter, i) => ['bobot' + letter, 'poin' + letter, 'skor' + letter, 'score' + letter, 'option' + (i + 1) + 'points']),
+  ['bobot', 'poin', 'points', 'bobotpoin', 'bobotesai'],
   ['kelas', 'tingkat', 'cohort', 'kategori'],
 ];
 function tableRows(rows) {
@@ -42,7 +42,7 @@ function tableRows(rows) {
   const extras = keys.map((k, i) => /^(option[5-9]|pilihan[e-z]|opsi[e-z])$/.test(k) ? i : -1).filter(i => i >= 0);
   return rows.slice(header + 1).filter(row => row.some(v => clean(v))).map((row, i) => {
     const values = indexes.map(idx => idx < 0 ? '' : clean(row[idx]));
-    return { prompt: values[0], type: values[1], options: values.slice(2, 6), correct: values[6], points: values[7], cohort: values[8], extraOptions: extras.some(i => clean(row[i])), source: 'Baris ' + (header + i + 2) };
+    return { prompt: values[0], type: values[1], options: values.slice(2, 6), optionPoints: values.slice(6, 10), points: values[10], cohort: values[11], extraOptions: extras.some(i => clean(row[i])), source: 'Baris ' + (header + i + 2) };
   });
 }
 function excel(files) {
@@ -93,13 +93,15 @@ function word(files) {
   for (const line of nodes(doc, 'p').flatMap(p => wordText(p).split('\n')).map(clean).filter(Boolean)) {
     const question = line.match(/^(?:\d+[.)]\s*|(?:pertanyaan|soal)\s*:\s*)(.+)$/i);
     if (question) {
-      current = { prompt: question[1], options: ['', '', '', ''], source: 'Soal ' + (rows.length + 1) };
+      current = { prompt: question[1], options: ['', '', '', ''], optionPoints: ['', '', '', ''], source: 'Soal ' + (rows.length + 1) };
       rows.push(current); continue;
     }
     if (!current) continue;
     const option = line.match(/^([A-D])[.)]\s*(.+)$/i);
-    const meta = line.match(/^(kunci(?: jawaban)?|jawaban|bobot|poin|kelas|jenis)\s*:\s*(.*)$/i);
+    const weight = line.match(/^(?:bobot|poin|skor)\s*([A-D])\s*:\s*(.*)$/i);
+    const meta = line.match(/^(kunci(?: jawaban)?|jawaban|bobot(?: esai)?|poin|kelas|jenis)\s*:\s*(.*)$/i);
     if (option) current.options[option[1].toUpperCase().charCodeAt(0) - 65] = option[2];
+    else if (weight) current.optionPoints[weight[1].toUpperCase().charCodeAt(0) - 65] = weight[2];
     else if (meta) {
       const target = /kunci|jawaban/i.test(meta[1]) ? 'correct' : /bobot|poin/i.test(meta[1]) ? 'points' : /kelas/i.test(meta[1]) ? 'cohort' : 'type';
       current[target] = meta[2];
@@ -115,21 +117,20 @@ export function validateImport(rows, defaultCohort) {
     const label = row.source ?? 'Soal ' + (index + 1);
     const error = text => errors.push(label + ': ' + text);
     const prompt = clean(row.prompt), rawType = key(row.type);
-    const type = !rawType || ['pg', 'pilihanganda', 'choice', 'multiplechoice', 'mcq'].includes(rawType) ? 'choice' : ['esai', 'essay', 'uraian', 'openended'].includes(rawType) ? 'essay' : null;
+    const type = !rawType || ['pg', 'pilihanganda', 'pilihanberbobot', 'choice', 'multiplechoice', 'mcq'].includes(rawType) ? 'choice' : ['esai', 'essay', 'uraian', 'openended'].includes(rawType) ? 'essay' : null;
     const cohortRaw = key(row.cohort || defaultCohort).replace(/^kelas/, '');
     const cohort = ({ x: 'X', '10': 'X', xi: 'XI', '11': 'XI' })[cohortRaw];
-    const points = clean(row.points) ? Number(row.points) : 10;
+    const optionPoints = (row.optionPoints ?? []).map(value => clean(value) === '' ? NaN : Number(value));
+    const points = type === 'choice' ? Math.max(...optionPoints) : clean(row.points) ? Number(row.points) : 10;
     const options = (row.options ?? []).map(clean);
-    const answer = clean(row.correct).toUpperCase();
-    const correct = /^[A-D]$/.test(answer) ? answer.charCodeAt(0) - 65 : /^[1-4]$/.test(answer) ? Number(answer) - 1 : -1;
     if (!prompt || prompt.length > 1500) error('pertanyaan wajib diisi, maksimal 1.500 karakter.');
     if (!type) error('jenis harus PG atau Esai.');
     if (row.extraOptions) error('portal mendukung empat pilihan A–D. Hapus pilihan tambahan.');
     if (!cohort) error('kelas harus X atau XI.');
-    if (!Number.isInteger(points) || points < 1 || points > 100) error('bobot harus bilangan bulat 1–100.');
+    if (type === 'essay' && (!Number.isInteger(points) || points < 1 || points > 100)) error('bobot esai harus bilangan bulat 1–100.');
     if (type === 'choice' && (options.length !== 4 || options.some(v => !v || v.length > 500))) error('isi pilihan A–D, masing-masing maksimal 500 karakter.');
-    if (type === 'choice' && correct < 0) error('kunci harus A–D atau 1–4.');
-    valid.push({ id: crypto.randomUUID(), prompt, type, cohort, points, ...(type === 'choice' ? { options, correct } : {}) });
+    if (type === 'choice' && (optionPoints.length !== 4 || optionPoints.some(v => !Number.isInteger(v) || v < 0 || v > 1000))) error('isi Bobot A–D dengan bilangan bulat 0–1.000. Unduh template terbaru jika kolom bobot belum ada.');
+    valid.push({ id: crypto.randomUUID(), prompt, type, cohort, points: Number.isFinite(points) ? points : 0, ...(type === 'choice' ? { options, optionPoints: optionPoints.map(v => Number.isFinite(v) ? v : null) } : {}) });
   });
   return { rows: valid, errors };
 }

@@ -523,15 +523,18 @@ function overview(data) {
     '</div>' + err + saveButton('Simpan Pengaturan') + '</form></section>';
 }
 
+function choiceScores(item) {
+  return item.optionPoints ?? letters.map((_, i) => i === item.correct ? item.points : 0);
+}
+
 function questionForm(edit) {
   const choice = !edit || edit.type === 'choice';
   return '<section class="surface"><div class="section-head"><h2>' + (edit ? 'Edit Soal' : 'Tambah Soal') + '</h2>' + btn('close-edit', 'Batal') + '</div><form id="question-form" class="admin-form">' +
     '<div class="form-row">' + stack('Kategori kelas', '<select name="cohort" required><option value="">Pilih kelas</option>' + cohortOptions(edit?.cohort ?? state.questionCohort) + '</select>') +
-    stack('Jenis soal', '<select name="type"><option value="choice">Pilihan ganda</option><option value="essay"' + (choice ? '' : ' selected') + '>Esai</option></select>') +
-    stack('Bobot poin', '<input name="points" type="number" min="1" max="100" value="' + (edit?.points ?? 10) + '" required>') + '</div>' +
+    stack('Jenis soal', '<select name="type"><option value="choice">Pilihan berbobot (A–D)</option><option value="essay"' + (choice ? '' : ' selected') + '>Esai</option></select>') +
+    '<div id="essay-points"' + (choice ? ' hidden' : '') + '>' + stack('Bobot maksimal esai', '<input name="points" type="number" min="1" max="100" value="' + (edit?.type === 'essay' ? edit.points : 10) + '"' + (choice ? ' disabled' : ' required') + '>') + '</div></div>' +
     stack('Pertanyaan', '<textarea name="prompt" rows="3" maxlength="1500" required>' + html(edit?.prompt) + '</textarea>') +
-    '<div class="form-row" id="choices"' + (choice ? '' : ' hidden') + '>' + letters.map((letter, i) => stack('Pilihan ' + letter, '<input name="option" maxlength="500" value="' + html(edit?.options?.[i]) + '"' + (choice ? ' required' : '') + '>')).join('') +
-    stack('Kunci jawaban', '<select name="correct">' + letters.map((letter, i) => '<option value="' + i + '"' + (edit?.correct === i ? ' selected' : '') + '>' + letter + '</option>').join('') + '</select>') + '</div>' +
+    '<div id="choices"' + (choice ? '' : ' hidden') + '><p class="muted">Setiap jawaban memiliki bobot sendiri, tanpa penanda benar atau salah. Nilai maksimal soal mengikuti bobot tertinggi.</p><div class="choice-weight-grid">' + letters.map((letter, i) => '<div class="choice-weight-item">' + stack('Jawaban ' + letter, '<input name="option" maxlength="500" value="' + html(edit?.options?.[i]) + '"' + (choice ? ' required' : ' disabled') + '>') + stack('Bobot ' + letter, '<input name="optionPoint" type="number" min="0" max="1000" step="1" placeholder="0–1000" value="' + html(edit?.type === 'choice' ? choiceScores(edit)[i] : '') + '"' + (choice ? ' required' : ' disabled') + '>') + '</div>').join('') + '</div></div>' +
     err + saveButton('Simpan Soal') + '</form></section>';
 }
 
@@ -544,7 +547,7 @@ function questionsPanel(data) {
     (legacy ? '<option value="unassigned"' + (state.questionCohort === 'unassigned' ? ' selected' : '') + '>Belum dikategorikan</option>' : '') + '</select></label>' +
     (legacy ? '<p class="category-notice">Soal lama perlu dipilih kategorinya melalui Edit agar tersedia untuk ujian baru.</p>' : '') +
     (filtered.length ? table(['Pertanyaan', 'Kelas', 'Jenis', 'Bobot', 'Tindakan'], filtered.map(q => [
-      html(q.prompt), q.cohort ? html(cohortLabel(q.cohort)) : 'Belum dikategorikan', q.type === 'choice' ? 'Pilihan ganda' : 'Esai', q.points + ' poin',
+      html(q.prompt), q.cohort ? html(cohortLabel(q.cohort)) : 'Belum dikategorikan', q.type === 'choice' ? 'Pilihan berbobot' : 'Esai', 'Maks. ' + q.points + ' poin',
       '<div class="actions">' + btn('edit', 'Edit', 'data-id="' + q.id + '"') + btn('delete', 'Hapus', 'data-id="' + q.id + '"') + '</div>',
     ]), true) : empty('Belum ada soal pada kategori ini.')) + '</section>';
 }
@@ -555,14 +558,14 @@ function questionImportPanel(data) {
   const remaining = 100 - data.questions.length;
   return '<section class="surface question-import-panel"><div class="section-head"><div><h2>Impor soal dari berkas</h2><p>Unggah Word (.docx) atau Excel (.xlsx), maksimal 5 MB. Tersedia ' + remaining + ' slot soal.</p></div>' + btn('close-question-import', 'Tutup') + '</div>' +
     '<div class="template-links"><a class="secondary small" href="/templates/soal-mpk.docx" download>Unduh Template Word</a><a class="secondary small" href="/templates/soal-mpk.xlsx" download>Unduh Template Excel</a></div>' +
-    '<p class="muted import-guidance">Isi soal teks pilihan ganda atau esai pada template. Kunci pilihan ganda: A–D. Kolom kelas yang kosong mengikuti pilihan di bawah. Excel dibaca dari lembar pertama yang terlihat.</p>' +
+    '<p class="muted import-guidance">Isi soal pilihan berbobot atau esai pada template terbaru. Tuliskan Bobot A–D untuk setiap pilihan, tanpa kunci jawaban. Kolom kelas yang kosong mengikuti pilihan di bawah. Excel dibaca dari lembar pertama yang terlihat.</p>' +
     '<form id="question-import-form" class="admin-form"><div class="form-row">' + stack('Kelas jika tidak tertulis di berkas', '<select name="cohort">' + cohortOptions(state.questionImportCohort ?? (['X', 'XI'].includes(state.questionCohort) ? state.questionCohort : 'X')) + '</select>') +
     stack('Berkas soal', '<input type="file" name="file" accept=".docx,.xlsx" required>') + '</div>' + err + saveButton('Baca dan Pratinjau Soal') + '</form>' +
-    (preview ? '<div class="import-preview" id="question-import-preview" tabindex="-1"><h3>Pratinjau ' + preview.rows.length + ' soal</h3><p class="muted">' + html(preview.name) + ' · Periksa pertanyaan, kunci, bobot, dan kelas sebelum menyimpan.</p>' +
+    (preview ? '<div class="import-preview" id="question-import-preview" tabindex="-1"><h3>Pratinjau ' + preview.rows.length + ' soal</h3><p class="muted">' + html(preview.name) + ' · Periksa pertanyaan, bobot setiap pilihan, dan kelas sebelum menyimpan.</p>' +
       (preview.errors.length ? '<div class="import-errors" role="alert"><strong>Perbaiki berkas lalu unggah ulang. Belum ada soal disimpan.</strong><ul>' + preview.errors.map(e => '<li>' + html(e) + '</li>').join('') + '</ul></div>' : '') +
       (preview.rows.length > remaining ? '<p class="form-error" role="alert">Jumlah soal melebihi kapasitas bank soal. Kurangi isi berkas atau hapus soal yang tidak digunakan.</p>' : '') +
       '<div class="question-preview-list">' + preview.rows.map((q, i) => '<article class="question-preview-item"><div class="question-preview-meta"><strong>Soal ' + (i + 1) + '</strong><span>' + html(q.cohort ?? 'Kelas belum valid') + ' · ' + (q.type === 'essay' ? 'Esai' : 'Pilihan ganda') + ' · ' + html(q.points) + ' poin</span></div><p class="preserve-lines">' + html(q.prompt) + '</p>' +
-        (q.type === 'choice' ? '<ol type="A">' + q.options.map((o, n) => '<li' + (q.correct === n ? ' class="correct-option"' : '') + '>' + html(o) + (q.correct === n ? ' <strong>✓ Kunci</strong>' : '') + '</li>').join('') + '</ol><p class="muted">Kunci: ' + (letters[q.correct] ?? 'Belum valid') + '</p>' : '') + '</article>').join('') + '</div>' +
+        (q.type === 'choice' ? '<ol type="A">' + q.options.map((o, n) => '<li>' + html(o) + ' <strong>(' + html(q.optionPoints?.[n] ?? 'Belum diisi') + ' poin)</strong></li>').join('') + '</ol>' : '') + '</article>').join('') + '</div>' +
       '<div class="actions">' + (!preview.errors.length && preview.rows.length <= remaining ? '<button class="primary" data-action="save-question-import">Simpan ' + preview.rows.length + ' Soal ke Bank Soal</button>' : '') + btn('discard-question-import', 'Batal Impor') + '</div></div>' : '') + '</section>';
 }
 
@@ -655,7 +658,7 @@ function reviewPanel(row, user) {
       '<article class="review-item"><h3>' + (i + 1) + '. ' + html(item.prompt) + '</h3><p class="response-text">' + html(answer(item, row.answers[item.id]) || 'Belum dijawab') + '</p>' +
       (item.type === 'essay'
         ? stack('Nilai (maks. ' + item.points + ')', '<input type="number" min="0" max="' + item.points + '" name="' + item.id + '" value="' + (row.review?.points[item.id] ?? '') + '" required>')
-        : '<p class="muted">Kunci: ' + html(item.options[item.correct]) + ' · Nilai: ' + (row.answers[item.id] === item.correct ? item.points : 0) + '/' + item.points + '</p>') +
+        : '<p class="muted">Bobot pilihan: ' + choiceScores(item).map((p, n) => letters[n] + ' = ' + p).join(' · ') + '</p><p class="muted">Nilai diperoleh: ' + (Number.isInteger(row.answers[item.id]) ? choiceScores(item)[row.answers[item.id]] ?? 0 : 0) + '/' + item.points + '</p>') +
       '</article>'
     ).join('') + err + (essays ? saveButton('Simpan Nilai Esai') : '') + '</form></section>';
 }
@@ -757,7 +760,10 @@ function adminView() {
     const choice = event.target.value === 'choice';
     const group = app.querySelector('#choices');
     group.hidden = !choice;
-    group.querySelectorAll('input').forEach(input => { input.required = choice; });
+    group.querySelectorAll('input').forEach(input => { input.required = choice; input.disabled = !choice; });
+    app.querySelector('#essay-points').hidden = choice;
+    app.querySelector('[name="points"]').required = !choice;
+    app.querySelector('[name="points"]').disabled = choice;
   });
   app.querySelector('#cohort-filter')?.addEventListener('change', event => {
     state.cohort = event.target.value;
@@ -793,7 +799,7 @@ function adminView() {
       message('Pengaturan disimpan.');
     },
     'question-form': async data => {
-      await api('admin/questions', { ...Object.fromEntries(data), id: state.edit === 'new' ? undefined : state.edit, options: data.getAll('option') });
+      await api('admin/questions', { ...Object.fromEntries(data), id: state.edit === 'new' ? undefined : state.edit, options: data.getAll('option'), optionPoints: data.getAll('optionPoint') });
       state.edit = null;
       await loadAdmin();
       message('Soal disimpan.');

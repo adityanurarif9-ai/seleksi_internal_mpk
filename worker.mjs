@@ -56,16 +56,16 @@ function questionInput(input, id) {
   if (!input || typeof input !== 'object') fail('Format soal tidak valid.');
   const type = input.type;
   const prompt = typeof input.prompt === 'string' ? input.prompt.trim() : '';
-  const points = Number(input.points);
-  if (!['choice', 'essay'].includes(type) || !prompt || prompt.length > 1500 || !Number.isInteger(points) || points < 1 || points > 100) fail('Isi pertanyaan maksimal 1.500 karakter dan bobot 1–100.');
+  if (!['choice', 'essay'].includes(type) || !prompt || prompt.length > 1500) fail('Isi pertanyaan maksimal 1.500 karakter dan pilih jenis soal.');
   if (!['X', 'XI'].includes(input.cohort)) fail('Pilih kategori soal kelas X atau XI.');
-  const item = { id, type, prompt, points, cohort: input.cohort };
+  const item = { id, type, prompt, points: Number(input.points), cohort: input.cohort };
   if (type === 'choice') {
     const options = Array.isArray(input.options) ? input.options.map(value => typeof value === 'string' ? value.trim() : '') : [];
-    const correct = Number(input.correct);
-    if (options.length !== 4 || options.some(value => !value || value.length > 500) || input.correct === '' || input.correct == null || ![0, 1, 2, 3].includes(correct)) fail('Isi empat pilihan maksimal 500 karakter dan tentukan kunci jawaban.');
-    Object.assign(item, { options, correct });
-  }
+    const optionPoints = Array.isArray(input.optionPoints) ? input.optionPoints.map(value => !['string', 'number'].includes(typeof value) || String(value).trim() === '' ? NaN : Number(value)) : [];
+    if (options.length !== 4 || options.some(value => !value || value.length > 500)) fail('Isi empat pilihan jawaban, masing-masing maksimal 500 karakter.');
+    if (optionPoints.length !== 4 || optionPoints.some(value => !Number.isInteger(value) || value < 0 || value > 1000)) fail('Isi bobot A–D dengan bilangan bulat 0–1.000.');
+    Object.assign(item, { options, optionPoints, points: Math.max(...optionPoints) });
+  } else if (!Number.isInteger(item.points) || item.points < 1 || item.points > 100) fail('Bobot esai harus bilangan bulat 1–100.');
   return item;
 }
 
@@ -80,7 +80,9 @@ function grade(items, answers, review) {
   const max = items.reduce((sum, item) => sum + item.points, 0);
   const score = items.reduce((sum, item) => {
     if (item.type === 'essay') return sum + (review?.points[item.id] ?? 0);
-    return sum + (answers[item.id] === item.correct ? item.points : 0);
+    const selected = answers[item.id];
+    if (!Number.isInteger(selected) || selected < 0 || selected >= item.options.length) return sum;
+    return sum + (Array.isArray(item.optionPoints) ? item.optionPoints[selected] : selected === item.correct ? item.points : 0);
   }, 0);
   return { score, max, pending: items.some(item => item.type === 'essay') && !review };
 }
@@ -90,7 +92,7 @@ function publicAttempt(row) {
   const items = parse(row.snapshot);
   const base = { started: row.started, deadline: row.deadline, submitted: row.submitted, count: items.length, violationCount: row.violation_count, tabExitCount: row.tab_exit_count };
   if (row.submitted) return base;
-  return { ...base, items: items.map(({ correct, ...item }) => item), answers: parse(row.answers) };
+  return { ...base, items: items.map(({ correct, optionPoints, ...item }) => item), answers: parse(row.answers) };
 }
 
 function answersFor(items, input) {

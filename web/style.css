@@ -347,6 +347,9 @@ td:first-child{overflow-wrap:anywhere;min-width:135px}
 .question-preview-meta span{color:#70626a}
 .question-preview-item p,.question-preview-item li{overflow-wrap:anywhere}
 .question-preview-item ol{padding-left:24px;line-height:1.7}
-.correct-option{color:#176440}
+.choice-weight-grid{display:grid;grid-template-columns:1fr 1fr;gap:16px;margin:16px 0}
+.choice-weight-item{display:grid;grid-template-columns:minmax(0,1fr) 110px;gap:12px;padding:16px;background:#faf7f5;border:1px solid #e8dedb;border-radius:12px;align-items:end}
+@media(max-width:800px){.choice-weight-grid{grid-template-columns:1fr}}
+@media(max-width:430px){.choice-weight-item{grid-template-columns:minmax(0,1fr) 88px;padding:12px;gap:8px}}
 .preserve-lines{white-space:pre-wrap}
 @media(max-width:600px){.template-links a{flex:1;text-align:center}.question-preview-item{padding:15px}.question-import-panel .actions{flex-wrap:wrap}.question-import-panel .actions button{width:100%}}

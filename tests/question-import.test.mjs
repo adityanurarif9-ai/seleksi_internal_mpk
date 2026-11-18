@@ -16,7 +16,7 @@ test('question import is authorized, validated, atomic, retryable, and filtered 
     const data = await response.json();
     return { response, data };
   }
-  const question = (cohort = 'X') => ({ id: crypto.randomUUID(), cohort, prompt: 'Contoh soal ' + crypto.randomUUID(), type: 'choice', options: ['A', 'B', 'C', 'D'], correct: 2, points: 10 });
+  const question = (cohort = 'X') => ({ id: crypto.randomUUID(), cohort, prompt: 'Contoh soal ' + crypto.randomUUID(), type: 'choice', options: ['A', 'B', 'C', 'D'], optionPoints: [2, 6, 8, 10], points: 10 });
   try {
     assert.equal((await api('admin/questions/import', { rows: [question()] })).response.status, 401);
     const login = await api('login', { username: 'admin', password: env.ADMIN_PASSWORD, role: 'admin' });
@@ -28,7 +28,7 @@ test('question import is authorized, validated, atomic, retryable, and filtered 
     assert.equal((await api('admin/dashboard')).data.questions.length, 2);
     assert.equal((await api('admin/questions/import', { rows })).response.status, 200);
     assert.equal((await api('admin/dashboard')).data.questions.length, 2, 'retry must not duplicate questions');
-    assert.equal((await api('admin/questions/import', { rows: [question(), { ...question(), correct: 8 }] })).response.status, 400);
+    assert.equal((await api('admin/questions/import', { rows: [question(), { ...question(), optionPoints: [2, -6, 8, 10] }] })).response.status, 400);
     assert.equal((await api('admin/dashboard')).data.questions.length, 2, 'invalid batch must not write any rows');
     assert.equal((await api('admin/questions/import', { rows: [{ ...question(), cohort: 'XII' }] })).response.status, 400);
     assert.equal((await api('admin/questions/import', { rows: [{ ...rows[0], prompt: 'Changed content' }] })).response.status, 409);
@@ -45,6 +45,7 @@ test('question import is authorized, validated, atomic, retryable, and filtered 
     assert.equal(attempt.data.attempt.items.length, 1);
     assert.equal(attempt.data.attempt.items[0].cohort, 'X');
     assert.equal(attempt.data.attempt.items[0].correct, undefined, 'answer keys must not leak to participants');
+    assert.equal(attempt.data.attempt.items[0].optionPoints, undefined, 'option weights must not leak to participants');
     assert.equal((await api('admin/questions/import', { rows: Array.from({ length: 98 }, () => question()) })).response.status, 200);
     assert.equal((await api('admin/questions/import', { rows: [question(), question()] })).response.status, 409);
     assert.equal((await api('admin/dashboard')).data.questions.length, 100, 'capacity failure must roll back all inserted rows');
