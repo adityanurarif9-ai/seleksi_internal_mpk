@@ -41,14 +41,16 @@ async function currentUser(db, raw) {
 }
 
 async function settings(db, cohort) {
-  const row = await db.prepare('SELECT duration, is_open FROM settings WHERE id=1').first();
-  const count = await db.prepare('SELECT count(*) AS total FROM questions').first();
-  if (cohort !== undefined) return { ...row, total: ['X', 'XI'].includes(cohort) ? (await questions(db)).filter(item => item.cohort === cohort).length : 0 };
-  return { ...row, total: count.total };
+  const filter = cohort !== undefined;
+  const clause = filter ? ' WHERE ' + (db.cohortExpression ?? "json_extract(body, '$.cohort')") + '=?' : '';
+  return db.prepare('SELECT duration, is_open, (SELECT count(*) FROM questions' + clause + ') AS total FROM settings WHERE id=1')
+    .bind(...(filter ? [cohort ?? ''] : [])).first();
 }
 
-async function questions(db) {
-  const data = await db.prepare('SELECT body FROM questions ORDER BY ' + (db.questionOrder ?? 'rowid')).all();
+async function questions(db, cohort) {
+  const clause = cohort === undefined ? '' : ' WHERE ' + (db.cohortExpression ?? "json_extract(body, '$.cohort')") + '=?';
+  const data = await db.prepare('SELECT body FROM questions' + clause + ' ORDER BY ' + (db.questionOrder ?? 'rowid'))
+    .bind(...(cohort === undefined ? [] : [cohort])).all();
   return data.results.map(q => parse(q.body));
 }
 
@@ -71,9 +73,12 @@ function questionInput(input, id) {
 
 async function attempt(db, id) {
   const now = Date.now();
-  await db.prepare('UPDATE attempts SET submitted=deadline WHERE user_id=? AND submitted IS NULL AND deadline<=?').bind(id, now).run();
-  return db.prepare("SELECT attempts.*, (SELECT count(*) FROM violations WHERE violations.user_id=attempts.user_id) AS violation_count, (SELECT count(*) FROM violations WHERE violations.user_id=attempts.user_id AND kind='tab-hidden') AS tab_exit_count FROM attempts WHERE user_id=?")
+  const load = () => db.prepare("SELECT attempts.*, (SELECT count(*) FROM violations WHERE violations.user_id=attempts.user_id) AS violation_count, (SELECT count(*) FROM violations WHERE violations.user_id=attempts.user_id AND kind='tab-hidden') AS tab_exit_count FROM attempts WHERE user_id=?")
     .bind(id).first();
+  const row = await load();
+  if (!row || row.submitted || row.deadline > now) return row;
+  const expired = await db.prepare('UPDATE attempts SET submitted=deadline WHERE user_id=? AND submitted IS NULL AND deadline<=? RETURNING *').bind(id, now).first();
+  return expired ? { ...row, ...expired } : load();
 }
 
 function grade(items, answers, review) {
@@ -87,11 +92,11 @@ function grade(items, answers, review) {
   return { score, max, pending: items.some(item => item.type === 'essay') && !review };
 }
 
-function publicAttempt(row) {
+function publicAttempt(row, includeAnswers = true) {
   if (!row) return null;
   const items = parse(row.snapshot);
   const base = { started: row.started, deadline: row.deadline, submitted: row.submitted, count: items.length, violationCount: row.violation_count, tabExitCount: row.tab_exit_count };
-  if (row.submitted) return base;
+  if (row.submitted || !includeAnswers) return base;
   return { ...base, items: items.map(({ correct, optionPoints, ...item }) => item), answers: parse(row.answers) };
 }
 
@@ -148,7 +153,8 @@ async function api(request, env, path) {
     const username = field(input.username, 60).toLowerCase();
     const password = typeof input.password === 'string' ? input.password : '';
     if (!username || !password || password.length > 150) fail('Isi ID akun dan kata sandi.');
-    await limit(db, 'ip:' + (env.CLIENT_IP ?? request.headers.get('CF-Connecting-IP') ?? 'local'), 100);
+    // A school network can put all 50 participants behind one public address.
+    await limit(db, 'ip:' + (env.CLIENT_IP ?? request.headers.get('CF-Connecting-IP') ?? 'local'), 300);
     await limit(db, 'account:' + username, 12);
     let row = await db.prepare('SELECT * FROM users WHERE username=?').bind(username).first();
     if (!row && username === 'admin' && env.ADMIN_PASSWORD && equal(password, env.ADMIN_PASSWORD)) {
@@ -159,10 +165,13 @@ async function api(request, env, path) {
     const candidate = await passwordHash(password, row?.password.split('.')[0] ?? 'unregistered');
     if (!row || !equal(candidate, row.password) || row.role !== input.role) fail('ID akun, kata sandi, atau pilihan akses tidak sesuai.', 401);
     const session = token();
-    await db.batch([
-      db.prepare('DELETE FROM sessions WHERE expires<=?').bind(Date.now()),
-      db.prepare('INSERT INTO sessions VALUES (?,?,?)').bind(await hash(session), row.id, Date.now() + 12 * HOUR),
-      db.prepare('DELETE FROM login_limits WHERE key=?').bind(await hash('account:' + username)),
+    const now = Date.now();
+    const [sessionHash, limitKey] = await Promise.all([hash(session), hash('account:' + username)]);
+    if (db.createSession) await db.createSession({ sessionHash, userId: row.id, expires: now + 12 * HOUR, limitKey, now });
+    else await db.batch([
+      db.prepare('DELETE FROM sessions WHERE expires<=?').bind(now),
+      db.prepare('INSERT INTO sessions VALUES (?,?,?)').bind(sessionHash, row.id, now + 12 * HOUR),
+      db.prepare('DELETE FROM login_limits WHERE key=?').bind(limitKey),
     ]);
     const { password: _password, ...user } = row;
     return json({ user }, 200, { 'Set-Cookie': 'mpk_session=' + session + '; ' + cookie + '; Max-Age=43200' });
@@ -183,14 +192,15 @@ async function api(request, env, path) {
   }
   if (user.role !== 'participant') fail('Akses khusus peserta.', 403);
   if (path === '/api/exam' && method === 'GET') {
-    return json({ settings: await settings(db, user.cohort), attempt: publicAttempt(await attempt(db, user.id)), now: Date.now() });
+    const [config, row] = await Promise.all([settings(db, user.cohort), attempt(db, user.id)]);
+    return json({ settings: config, attempt: publicAttempt(row), now: Date.now() });
   }
   if (path === '/api/exam/start' && method === 'POST') {
     const existing = await attempt(db, user.id);
     if (existing) return json({ attempt: publicAttempt(existing), now: Date.now() });
     const config = await settings(db);
     if (!['X', 'XI'].includes(user.cohort)) fail('Tingkat kelas belum ditentukan. Hubungi panitia.', 409);
-    const items = (await questions(db)).filter(item => item.cohort === user.cohort);
+    const items = await questions(db, user.cohort);
     if (!config.is_open || !items.length) fail('Soal ujian untuk kelasmu belum tersedia atau ujian belum dibuka.', 409);
     const now = Date.now();
     await db.prepare('INSERT INTO attempts (user_id,snapshot,started,deadline) SELECT ?,?,?,? WHERE (SELECT is_open FROM settings WHERE id=1)=1 ON CONFLICT (user_id) DO NOTHING')
@@ -201,15 +211,17 @@ async function api(request, env, path) {
   }
   if (path === '/api/exam/answers' && method === 'POST') {
     const input = await body();
-    const row = await attempt(db, user.id);
+    let row = await attempt(db, user.id);
     if (!row) fail('Mulai ujian terlebih dahulu.', 409);
     if (!row.submitted) {
       const now = Date.now();
       const answers = stringify(answersFor(parse(row.snapshot), input.answers));
-      await db.prepare('UPDATE attempts SET answers=?, submitted=? WHERE user_id=? AND submitted IS NULL AND deadline>?')
-        .bind(answers, input.submit === true ? now : null, user.id, now).run();
+      const updated = await db.prepare('UPDATE attempts SET answers=?, submitted=? WHERE user_id=? AND submitted IS NULL AND deadline>? RETURNING *')
+        .bind(answers, input.submit === true ? now : null, user.id, now).first();
+      row = updated ? { ...row, ...updated } : await attempt(db, user.id);
     }
-    return json({ attempt: publicAttempt(await attempt(db, user.id)), now: Date.now() });
+    // Autosave only acknowledges the write; the browser already has its questions and answers.
+    return json({ attempt: publicAttempt(row, false), now: Date.now() });
   }
   if (path === '/api/exam/violations' && method === 'POST') {
     const { id, kind, at, started } = await body();
@@ -376,7 +388,11 @@ export default {
       const body = encoded ? Uint8Array.from(atob(content), byte => byte.charCodeAt(0)) : content;
       return new Response(body, { headers: { ...secureHeaders, 'Content-Type': type, 'Cache-Control': 'no-cache' } });
     } catch (error) {
-      if (!error.status) console.error(error.message);
+      if (!error.status && (['53300', '57P01', '57P02', '57P03', '08000', '08006', 'ECONNRESET', 'ETIMEDOUT'].includes(error.code) || /timeout|connection terminated/i.test(error.message))) {
+        console.error('portal_database_unavailable', error.code ?? 'timeout');
+        return json({ error: 'Server sedang sibuk atau koneksi terputus. Silakan coba lagi.' }, 503, { 'Retry-After': '2' });
+      }
+      if (!error.status) console.error('portal_request_failed', error.code ?? 'unknown');
       return json({ error: error.status ? error.message : 'Terjadi gangguan. Coba lagi sebentar.' }, error.status || 500);
     }
   },

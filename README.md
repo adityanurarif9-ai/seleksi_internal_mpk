@@ -46,6 +46,16 @@ Server lokal menerapkan migrasi pada `portal.sqlite` saat dijalankan. Akun lama 
 
 Supabase dimulai dengan database kosong dan ujian ditutup. Data yang sudah ada di `portal.sqlite` tetap tersimpan di komputer. `portal.sqlite` dan file konfigurasi yang berisi secret diabaikan oleh Git.
 
+### Pengaturan server untuk pelaksanaan bersama
+
+Fungsi Vercel ditempatkan di Dublin (`dub1`), berdekatan dengan database proyek yang berada di `eu-west-1`. Pool database dibatasi lima koneksi per proses dan didaftarkan ke pengelola koneksi Vercel. Jangan memindahkan region fungsi tanpa menyesuaikan lokasi database.
+
+Pembacaan status dan penyimpanan normal masing-masing menggunakan paling banyak tiga operasi database. Penyimpanan otomatis mengirim balasan ringkas; soal dan jawaban lengkap dimuat saat membuka atau melanjutkan ujian. Jawaban yang sudah dikumpulkan tidak dapat ditimpa oleh kiriman otomatis yang terlambat. Perubahan jawaban ditunda 800 milidetik sebelum penyimpanan otomatis untuk mengurangi permintaan saat peserta mengetik.
+
+Batas login untuk satu alamat jaringan adalah 300 percobaan per 10 menit agar jaringan sekolah dapat dipakai bersama. Batas per akun tetap 12 percobaan per 10 menit dan direset setelah login berhasil. Koneksi database yang sementara tidak tersedia menghasilkan status 503 agar proses simpan dapat dicoba ulang.
+
+Jalankan `npm test` untuk menguji 50 peserta simulasi melakukan login, membuka ujian, menyimpan, memuat ulang, dan mengumpulkan secara bersamaan pada database uji lokal. Pengujian ini memeriksa pemisahan jawaban, batas waktu, serta pengumpulan akhir; hasilnya tidak menggantikan pengukuran beban di hosting atau pemeriksaan internet peserta.
+
 ## Build Cloudflare Worker
 
 Jalankan `node build.mjs` untuk membuat Worker di `dist/server/index.js`. Hosting mengikat D1 sebagai `DB`, menjalankan migrasi yang ada di `drizzle/`, lalu menyediakan kata sandi awal melalui secret `ADMIN_PASSWORD`. Atur akses hosting untuk peserta yang diundang sebelum hari ujian.

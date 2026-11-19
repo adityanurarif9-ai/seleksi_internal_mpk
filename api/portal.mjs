@@ -1,5 +1,6 @@
 import worker from '../worker.mjs';
 import { postgresDatabase, supabasePool } from '../postgres.mjs';
+import { attachDatabasePool } from '@vercel/functions';
 
 let database;
 
@@ -12,7 +13,11 @@ export default {
       });
     }
     try {
-      database ??= postgresDatabase(supabasePool(process.env.DATABASE_URL));
+      if (!database) {
+        const pool = supabasePool(process.env.DATABASE_URL);
+        attachDatabasePool(pool);
+        database = postgresDatabase(pool);
+      }
       const url = new URL(request.url);
       if (url.pathname === '/api/portal') {
         const path = url.searchParams.get('mpk_path') ?? '';

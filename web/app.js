@@ -380,7 +380,7 @@ function autosave() {
   saveTimer = setTimeout(() => persist(false).catch(() => {
     saveLabel('Gagal menyimpan. Mencoba lagi…');
     saveTimer = setTimeout(autosave, 2000);
-  }), 350);
+  }), 800);
 }
 function examView() {
   const { items, answers } = state.attempt;

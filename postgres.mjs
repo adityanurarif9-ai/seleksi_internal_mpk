@@ -28,6 +28,12 @@ export function postgresDatabase(pool) {
   return {
     prepare,
     questionOrder: 'position',
+    cohortExpression: "body::jsonb->>'cohort'",
+    async createSession({ sessionHash, userId, expires, limitKey, now }) {
+      await pool.query(`WITH expired AS (DELETE FROM mpk.sessions WHERE expires<=$1),
+        cleared AS (DELETE FROM mpk.login_limits WHERE key=$2)
+        INSERT INTO mpk.sessions (token, user_id, expires) VALUES ($3,$4,$5)`, [now, limitKey, sessionHash, userId, expires]);
+    },
     async batch(statements, options = {}) {
       const client = await pool.connect();
       let discard = false;
@@ -61,9 +67,10 @@ export function supabasePool(connectionString) {
       ca: readFileSync(new URL('./certificates/supabase-ca.crt', import.meta.url), 'utf8'),
     },
     types,
-    max: 1,
-    idleTimeoutMillis: 10000,
-    connectionTimeoutMillis: 8000,
+    max: 5,
+    idleTimeoutMillis: 5000,
+    connectionTimeoutMillis: 10000,
+    query_timeout: 15000,
     allowExitOnIdle: true,
   });
   pool.on('error', () => console.error('Koneksi PostgreSQL yang menganggur terputus.'));
