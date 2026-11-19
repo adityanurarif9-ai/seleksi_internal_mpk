@@ -8,7 +8,7 @@ import worker from './worker.mjs';
 export function createLocalEnvironment(filename = ':memory:', password) {
   const sqlite = new DatabaseSync(filename);
   sqlite.exec('PRAGMA foreign_keys = ON; PRAGMA busy_timeout = 5000');
-  const migrations = ['0000_portal', '0001_cohorts_and_violations'];
+  const migrations = ['0000_portal', '0001_cohorts_and_violations', '0002_session_index'];
   sqlite.exec('BEGIN IMMEDIATE');
   try {
     const { user_version: version } = sqlite.prepare('PRAGMA user_version').get();

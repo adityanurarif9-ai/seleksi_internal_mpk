@@ -48,7 +48,7 @@ Supabase dimulai dengan database kosong dan ujian ditutup. Data yang sudah ada d
 
 ### Pengaturan server untuk pelaksanaan bersama
 
-Fungsi Vercel ditempatkan di Dublin (`dub1`), berdekatan dengan database proyek yang berada di `eu-west-1`. Pool database dibatasi lima koneksi per proses dan didaftarkan ke pengelola koneksi Vercel. Jangan memindahkan region fungsi tanpa menyesuaikan lokasi database.
+Fungsi Vercel ditempatkan di Dublin (`dub1`), berdekatan dengan database proyek yang berada di `eu-west-1`. Pool database dibatasi tiga koneksi per proses dan didaftarkan ke pengelola koneksi Vercel. Akun database `mpk_portal` diberi batas 24 koneksi. Penolakan koneksi sementara dicoba ulang secara terbatas sebelum ada query yang dijalankan; query yang sudah dikirim tidak diulang otomatis. Jangan memindahkan region fungsi tanpa menyesuaikan lokasi database.
 
 Pembacaan status dan penyimpanan normal masing-masing menggunakan paling banyak tiga operasi database. Penyimpanan otomatis mengirim balasan ringkas; soal dan jawaban lengkap dimuat saat membuka atau melanjutkan ujian. Jawaban yang sudah dikumpulkan tidak dapat ditimpa oleh kiriman otomatis yang terlambat. Perubahan jawaban ditunda 800 milidetik sebelum penyimpanan otomatis untuk mengurangi permintaan saat peserta mengetik.
 

@@ -10,6 +10,23 @@ const types = {
 };
 
 export function postgresDatabase(pool) {
+  async function acquire() {
+    for (let attempt = 0; ; attempt++) {
+      try { return await pool.connect(); }
+      catch (error) {
+        // Retry only rejected connection acquisition; never replay a query that may have committed.
+        if (error.code !== '53300' || attempt >= 3) throw error;
+        await new Promise(resolve => setTimeout(resolve, 100 * 2 ** attempt + Math.floor(Math.random() * 100)));
+      }
+    }
+  }
+  const runner = {
+    async query(text, values) {
+      const client = await acquire();
+      try { return await client.query(text, values); }
+      finally { client.release(); }
+    },
+  };
   function prepare(query) {
     // Only internal SQL reaches this adapter. Data values remain bind parameters.
     let position = 0;
@@ -18,9 +35,9 @@ export function postgresDatabase(pool) {
       const execute = runner => runner.query(text, values);
       return {
         execute,
-        async first() { return (await execute(pool)).rows[0] ?? null; },
-        async all() { return { results: (await execute(pool)).rows }; },
-        async run() { return { meta: { changes: (await execute(pool)).rowCount } }; },
+        async first() { return (await execute(runner)).rows[0] ?? null; },
+        async all() { return { results: (await execute(runner)).rows }; },
+        async run() { return { meta: { changes: (await execute(runner)).rowCount } }; },
       };
     };
     return { ...bind(), bind };
@@ -30,12 +47,12 @@ export function postgresDatabase(pool) {
     questionOrder: 'position',
     cohortExpression: "body::jsonb->>'cohort'",
     async createSession({ sessionHash, userId, expires, limitKey, now }) {
-      await pool.query(`WITH expired AS (DELETE FROM mpk.sessions WHERE expires<=$1),
+      await runner.query(`WITH expired AS (DELETE FROM mpk.sessions WHERE expires<=$1),
         cleared AS (DELETE FROM mpk.login_limits WHERE key=$2)
         INSERT INTO mpk.sessions (token, user_id, expires) VALUES ($3,$4,$5)`, [now, limitKey, sessionHash, userId, expires]);
     },
     async batch(statements, options = {}) {
-      const client = await pool.connect();
+      const client = await acquire();
       let discard = false;
       try {
         await client.query('BEGIN');
@@ -67,7 +84,7 @@ export function supabasePool(connectionString) {
       ca: readFileSync(new URL('./certificates/supabase-ca.crt', import.meta.url), 'utf8'),
     },
     types,
-    max: 5,
+    max: 3,
     idleTimeoutMillis: 5000,
     connectionTimeoutMillis: 10000,
     query_timeout: 15000,
